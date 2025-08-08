@@ -1,2 +1,2 @@
 # FATE
-FATE : Fairness-aware Allocate containers in Tiered-memory Environment
+FATE : Fairness-aware Allocation of containers in Tiered-memory Environment
