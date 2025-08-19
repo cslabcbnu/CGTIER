@@ -34,6 +34,7 @@ struct memory_dev_type {
 };
 
 struct access_coordinate;
+extern int* node_to_tier;
 
 #ifdef CONFIG_NUMA
 extern bool numa_demotion_enabled;
@@ -52,7 +53,6 @@ int mt_perf_to_adistance(struct access_coordinate *perf, int *adist);
 struct memory_dev_type *mt_find_alloc_memory_type(int adist,
 						  struct list_head *memory_types);
 void mt_put_memory_types(struct list_head *memory_types);
-int get_memtier_index(int node);
 #ifdef CONFIG_MIGRATION
 int next_demotion_node(int node);
 void node_get_allowed_targets(pg_data_t *pgdat, nodemask_t *targets);

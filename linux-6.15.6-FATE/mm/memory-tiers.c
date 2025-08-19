@@ -51,6 +51,8 @@ static const struct bus_type memory_tier_subsys = {
 	.dev_name = "memory_tier",
 };
 
+int* node_to_tier;
+
 #ifdef CONFIG_NUMA_BALANCING
 /**
  * folio_use_access_time - check if a folio reuses cpupid for page access time
@@ -68,7 +70,6 @@ bool folio_use_access_time(struct folio *folio)
 	       !node_is_toptier(folio_nid(folio));
 }
 #endif
-
 
 #ifdef CONFIG_MIGRATION
 static int top_tier_adistance;
@@ -274,9 +275,9 @@ static struct memory_tier *__node_get_memory_tier(int node)
 				     lockdep_is_held(&memory_tier_lock));
 }
 
-int get_memtier_index(int node)
+static int get_memtier_index(int node)
 {
-	struct memory_tier *target_memtier = __node_get_memory_tier(node);
+    struct memory_tier *target_memtier = __node_get_memory_tier(node);
     struct memory_tier *current_memtier;
     int index = 0;
     list_for_each_entry(current_memtier, &memory_tiers, list) {
@@ -286,7 +287,7 @@ int get_memtier_index(int node)
         index++;
     }
 
-    return -1; 
+    return -1;
 }
 
 #ifdef CONFIG_MIGRATION
@@ -736,6 +737,17 @@ static int __init memory_tier_late_init(void)
 
 	establish_demotion_targets();
 	put_online_mems();
+
+	node_to_tier = kcalloc(nr_node_ids, sizeof(int), GFP_KERNEL);
+	for (int i = 0; i < nr_node_ids; i++) {
+		if (node_state(i, N_ONLINE))
+			node_to_tier[i] = get_memtier_index(i);
+		else
+			node_to_tier[i] = -1;
+	}
+
+	for (int i = 0; i < nr_node_ids; i++) 
+		printk("[ALERT] Node [%d] : Tier [%d]\n", i, node_to_tier[i]);	
 
 	return 0;
 }

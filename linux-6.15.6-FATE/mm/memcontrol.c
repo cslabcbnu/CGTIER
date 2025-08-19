@@ -63,7 +63,6 @@
 #include <linux/seq_buf.h>
 #include <linux/sched/isolation.h>
 #include <linux/kmemleak.h>
-#include <linux/memory-tiers.h>
 #include "internal.h"
 #include <net/sock.h>
 #include <net/ip.h>
@@ -77,8 +76,6 @@
 #undef CREATE_TRACE_POINTS
 
 #include <trace/events/vmscan.h>
-
-#define MAX_MEM_TIER 4
 
 struct cgroup_subsys memory_cgrp_subsys __read_mostly;
 EXPORT_SYMBOL(memory_cgrp_subsys);
@@ -97,8 +94,6 @@ static bool cgroup_memory_nokmem __ro_after_init;
 
 /* BPF memory accounting disabled? */
 static bool cgroup_memory_nobpf __ro_after_init;
-
-static int node_to_tier[8];
 
 #ifdef CONFIG_CGROUP_WRITEBACK
 static DECLARE_WAIT_QUEUE_HEAD(memcg_cgwb_frn_waitq);
@@ -2247,7 +2242,7 @@ out:
 }
 
 static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
-			    unsigned int nr_pages, int tier)
+			    unsigned int nr_pages)
 {
 	unsigned int batch = max(MEMCG_CHARGE_BATCH, nr_pages);
 	int nr_retries = MAX_RECLAIM_RETRIES;
@@ -2271,7 +2266,6 @@ retry:
 	if (!do_memsw_account() ||
 	    page_counter_try_charge(&memcg->memsw, batch, &counter)) {
 		if (page_counter_try_charge(&memcg->memory, batch, &counter))
-			if (tier + 1) page_counter_try_charge(&memcg->per_tier[tier], batch, &counter);
 			goto done_restock;
 		if (do_memsw_account())
 			page_counter_uncharge(&memcg->memsw, batch);
@@ -2376,7 +2370,6 @@ force:
 	 * temporarily by force charging it.
 	 */
 	page_counter_charge(&memcg->memory, nr_pages);
-	if (tier + 1) page_counter_charge(&memcg->per_tier[tier], nr_pages);
 	if (do_memsw_account())
 		page_counter_charge(&memcg->memsw, nr_pages);
 
@@ -2443,12 +2436,12 @@ done_restock:
 }
 
 static inline int try_charge(struct mem_cgroup *memcg, gfp_t gfp_mask,
-			     unsigned int nr_pages, int tier)
+			     unsigned int nr_pages)
 {
 	if (mem_cgroup_is_root(memcg))
 		return 0;
 
-	return try_charge_memcg(memcg, gfp_mask, nr_pages, tier);
+	return try_charge_memcg(memcg, gfp_mask, nr_pages);
 }
 
 static void commit_charge(struct folio *folio, struct mem_cgroup *memcg)
@@ -2697,7 +2690,7 @@ static int obj_cgroup_charge_pages(struct obj_cgroup *objcg, gfp_t gfp,
 
 	memcg = get_mem_cgroup_from_objcg(objcg);
 
-	ret = try_charge_memcg(memcg, gfp, nr_pages, -1);
+	ret = try_charge_memcg(memcg, gfp, nr_pages);
 	if (ret)
 		goto out;
 
@@ -4474,24 +4467,6 @@ static ssize_t memory_reclaim(struct kernfs_open_file *of, char *buf,
 	return nbytes;
 }
 
-static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
-			       struct cftype *cft)
-{
-	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
-	long tier_id = (long)cft->private;
-	if (tier_id < 0 || tier_id >= MAX_MEM_TIER)
-        return 0;
-
-	return (u64)page_counter_read(&memcg->per_tier[tier_id]) * PAGE_SIZE;
-}
-
-#define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
-    {                                       \
-        .name = "tiered_memory_" #_tier "_current", \
-        .read_u64 = tiered_memory_current_read, \
-        .private = (void *)_tier,           \
-    }
-
 static struct cftype memory_files[] = {
 	{
 		.name = "current",
@@ -4551,10 +4526,6 @@ static struct cftype memory_files[] = {
 		.name = "numa_stat",
 		.seq_show = memory_numa_stat_show,
 	},
-    TIERED_MEMORY_CURRENT_CFTYPE(0),
-    TIERED_MEMORY_CURRENT_CFTYPE(1),
-    TIERED_MEMORY_CURRENT_CFTYPE(2),
-    TIERED_MEMORY_CURRENT_CFTYPE(3),
 #endif
 	{
 		.name = "oom.group",
@@ -4616,7 +4587,7 @@ static int charge_memcg(struct folio *folio, struct mem_cgroup *memcg,
 {
 	int ret;
 
-	ret = try_charge(memcg, gfp, folio_nr_pages(folio), node_to_tier[folio_nid(folio)]);
+	ret = try_charge(memcg, gfp, folio_nr_pages(folio));
 	if (ret)
 		goto out;
 
@@ -4725,8 +4696,6 @@ static void uncharge_batch(const struct uncharge_gather *ug)
 {
 	if (ug->nr_memory) {
 		page_counter_uncharge(&ug->memcg->memory, ug->nr_memory);
-		int tier = node_to_tier[ug->nid];
-		if (tier + 1) page_counter_uncharge(&ug->memcg->per_tier[tier], ug->nr_memory);
 		if (do_memsw_account())
 			page_counter_uncharge(&ug->memcg->memsw, ug->nr_memory);
 		if (ug->nr_kmem) {
@@ -4862,8 +4831,6 @@ void mem_cgroup_replace_folio(struct folio *old, struct folio *new)
 	/* Force-charge the new page. The old one will be freed soon */
 	if (!mem_cgroup_is_root(memcg)) {
 		page_counter_charge(&memcg->memory, nr_pages);
-		int tier = node_to_tier[folio_nid(old)];
-		if (tier + 1) page_counter_charge(&memcg->per_tier[tier], nr_pages);
 		if (do_memsw_account())
 			page_counter_charge(&memcg->memsw, nr_pages);
 	}
@@ -4962,7 +4929,7 @@ bool mem_cgroup_charge_skmem(struct mem_cgroup *memcg, unsigned int nr_pages,
 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys))
 		return memcg1_charge_skmem(memcg, nr_pages, gfp_mask);
 
-	if (try_charge_memcg(memcg, gfp_mask, nr_pages, -1) == 0) {
+	if (try_charge_memcg(memcg, gfp_mask, nr_pages) == 0) {
 		mod_memcg_state(memcg, MEMCG_SOCK, nr_pages);
 		return true;
 	}
@@ -5031,13 +4998,6 @@ static int __init mem_cgroup_init(void)
 	for_each_possible_cpu(cpu)
 		INIT_WORK(&per_cpu_ptr(&memcg_stock, cpu)->work,
 			  drain_local_stock);
-
-	for (int i = 0; i < nr_node_ids; i++) {
-        if (node_state(i, N_ONLINE))
-            node_to_tier[i] = get_memtier_index(i);
-        else
-            node_to_tier[i] = -1;
-    }
 
 	return 0;
 }
