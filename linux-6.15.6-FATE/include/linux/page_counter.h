@@ -74,27 +74,27 @@ static inline unsigned long page_counter_read(struct page_counter *counter)
 	return atomic_long_read(&counter->usage);
 }
 
-void page_counter_cancel(struct page_counter *counter
+void page_counter_cancel(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier
+			long tier,
 #endif	
-			    ,unsigned long nr_pages);
-void page_counter_charge(struct page_counter *counter
+			unsigned long nr_pages);
+void page_counter_charge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			,long tier
+			long tier,
 #endif
-			,unsigned long nr_pages);
-bool page_counter_try_charge(struct page_counter *counter
+			unsigned long nr_pages);
+bool page_counter_try_charge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier
+			long tier,
 #endif
-			     ,unsigned long nr_pages,
-			     struct page_counter **fail);
-void page_counter_uncharge(struct page_counter *counter
+			unsigned long nr_pages,
+			struct page_counter **fail);
+void page_counter_uncharge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier
+			long tier,
 #endif
-			    ,unsigned long nr_pages);
+			unsigned long nr_pages);
 void page_counter_set_min(struct page_counter *counter, unsigned long nr_pages);
 void page_counter_set_low(struct page_counter *counter, unsigned long nr_pages);
 

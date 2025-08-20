@@ -51,11 +51,11 @@ static void propagate_protected_usage(struct page_counter *c,
  * @counter: counter
  * @nr_pages: number of pages to cancel
  */
-void page_counter_cancel(struct page_counter *counter 
+void page_counter_cancel(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier
+			long tier,
 #endif
-			    ,unsigned long nr_pages)
+			unsigned long nr_pages)
 {
 	long new;
 
@@ -89,11 +89,11 @@ void page_counter_cancel(struct page_counter *counter
  *
  * NOTE: This does not consider any configured counter limits.
  */
-void page_counter_charge(struct page_counter *counter
+void page_counter_charge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			,long tier
+			long tier,
 #endif
-			,unsigned long nr_pages)
+			unsigned long nr_pages)
 {
 	struct page_counter *c;
 	bool protection = track_protection(counter);
@@ -138,12 +138,12 @@ void page_counter_charge(struct page_counter *counter
  * Returns %true on success, or %false and @fail if the counter or one
  * of its ancestors has hit its configured limit.
  */
-bool page_counter_try_charge(struct page_counter *counter
+bool page_counter_try_charge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier 
+			long tier,
 #endif
-			    ,unsigned long nr_pages,
-			     struct page_counter **fail)
+			unsigned long nr_pages,
+			struct page_counter **fail)
 {
 	struct page_counter *c;
 	bool protection = track_protection(counter);
@@ -198,7 +198,11 @@ bool page_counter_try_charge(struct page_counter *counter
 
 failed:
 	for (c = counter; c != *fail; c = c->parent)
-		page_counter_cancel(c, nr_pages);
+		page_counter_cancel(c,
+#ifdef CONFIG_CGTIER
+				tier,
+#endif
+				nr_pages);
 
 	return false;
 }
@@ -208,20 +212,20 @@ failed:
  * @counter: counter
  * @nr_pages: number of pages to uncharge
  */
-void page_counter_uncharge(struct page_counter *counter
+void page_counter_uncharge(struct page_counter *counter,
 #ifdef CONFIG_CGTIER
-			    ,long tier
+			long tier,
 #endif
-			    ,unsigned long nr_pages)
+			unsigned long nr_pages)
 {
 	struct page_counter *c;
 
 	for (c = counter; c; c = c->parent)
-		page_counter_cancel(c
+		page_counter_cancel(c,
 #ifdef CONFIG_CGTIER
-				,tier
+				tier,
 #endif
-				,nr_pages);
+				nr_pages);
 }
 
 /**
