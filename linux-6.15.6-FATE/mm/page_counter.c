@@ -51,9 +51,23 @@ static void propagate_protected_usage(struct page_counter *c,
  * @counter: counter
  * @nr_pages: number of pages to cancel
  */
-void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
+void page_counter_cancel(struct page_counter *counter 
+#ifdef CONFIG_CGTIER
+			    ,long tier
+#endif
+			    ,unsigned long nr_pages)
 {
 	long new;
+
+#ifdef CONFIG_CGTIER
+	new = atomic_long_sub_return(nr_pages, &counter->usage_per_tier[tier]);
+	/* More uncharges than charges? */
+	if (WARN_ONCE(new < 0, "page_counter underflow: %ld nr_pages=%lu\n",
+		      new, nr_pages)) {
+		new = 0;
+		atomic_long_set(&counter->usage_per_tier[tier], new);
+	}
+#endif
 
 	new = atomic_long_sub_return(nr_pages, &counter->usage);
 	/* More uncharges than charges? */
@@ -73,13 +87,20 @@ void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
  *
  * NOTE: This does not consider any configured counter limits.
  */
-void page_counter_charge(struct page_counter *counter, unsigned long nr_pages)
+void page_counter_charge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			,long tier
+#endif
+			,unsigned long nr_pages)
 {
 	struct page_counter *c;
 	bool protection = track_protection(counter);
 
 	for (c = counter; c; c = c->parent) {
 		long new;
+#ifdef CONFIG_CGTIER
+		if (tier + 1) atomic_long_add(nr_pages, &c->usage_per_tier[tier]);
+#endif
 
 		new = atomic_long_add_return(nr_pages, &c->usage);
 		if (protection)
@@ -115,8 +136,11 @@ void page_counter_charge(struct page_counter *counter, unsigned long nr_pages)
  * Returns %true on success, or %false and @fail if the counter or one
  * of its ancestors has hit its configured limit.
  */
-bool page_counter_try_charge(struct page_counter *counter,
-			     unsigned long nr_pages,
+bool page_counter_try_charge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			    ,long tier 
+#endif
+			    ,unsigned long nr_pages,
 			     struct page_counter **fail)
 {
 	struct page_counter *c;
@@ -139,8 +163,14 @@ bool page_counter_try_charge(struct page_counter *counter,
 		 * we either see the new limit or the setter sees the
 		 * counter has changed and retries.
 		 */
+#ifdef CONFIG_CGTIER
+		if (tier + 1) atomic_long_add(nr_pages, &c->usage_per_tier[tier]);
+#endif
 		new = atomic_long_add_return(nr_pages, &c->usage);
 		if (new > c->max) {
+#ifdef CONFIG_CGTIER
+			if (tier + 1) atomic_long_sub(nr_pages, &c->usage_per_tier[tier]);
+#endif
 			atomic_long_sub(nr_pages, &c->usage);
 			/*
 			 * This is racy, but we can live with some
@@ -176,12 +206,20 @@ failed:
  * @counter: counter
  * @nr_pages: number of pages to uncharge
  */
-void page_counter_uncharge(struct page_counter *counter, unsigned long nr_pages)
+void page_counter_uncharge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			    ,long tier
+#endif
+			    ,unsigned long nr_pages)
 {
 	struct page_counter *c;
 
 	for (c = counter; c; c = c->parent)
-		page_counter_cancel(c, nr_pages);
+		page_counter_cancel(c
+#ifdef CONFIG_CGTIER
+				,tier
+#endif
+				,nr_pages);
 }
 
 /**

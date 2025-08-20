@@ -212,11 +212,19 @@ static void hugetlb_cgroup_move_parent(int idx, struct hugetlb_cgroup *h_cg,
 	if (!parent) {
 		parent = root_h_cgroup;
 		/* root has no limit */
-		page_counter_charge(&parent->hugepage[idx], nr_pages);
+		page_counter_charge(&parent->hugepage[idx]
+#ifdef CONFIG_CGTIER
+				,node_to_tier[folio_nid(folio)]
+#endif
+				,nr_pages);
 	}
 	counter = &h_cg->hugepage[idx];
 	/* Take the pages off the local counter */
-	page_counter_cancel(counter, nr_pages);
+	page_counter_cancel(counter
+#ifdef CONFIG_CGTIER
+			,node_to_tier[folio_nid(folio)]
+#endif	
+			,nr_pages);
 
 	set_hugetlb_cgroup(folio, parent);
 out:

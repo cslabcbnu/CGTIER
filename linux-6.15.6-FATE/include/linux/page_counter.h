@@ -13,6 +13,9 @@ struct page_counter {
 	 * v2. The memcg->memory.usage is a hot member of struct mem_cgroup.
 	 */
 	atomic_long_t usage;
+#ifdef CONFIG_CGTIER
+	atomic_long_t usage_per_tier[4];
+#endif
 	unsigned long failcnt; /* v1-only field */
 
 	CACHELINE_PADDING(_pad1_);
@@ -57,6 +60,9 @@ static inline void page_counter_init(struct page_counter *counter,
 				     bool protection_support)
 {
 	counter->usage = (atomic_long_t)ATOMIC_LONG_INIT(0);
+#ifdef CONFIG_CGTIER
+	for (long i = 0; i < 4; i++) counter->usage_per_tier[i] = (atomic_long_t)ATOMIC_LONG_INIT(0);
+#endif
 	counter->max = PAGE_COUNTER_MAX;
 	counter->parent = parent;
 	counter->protection_support = protection_support;
@@ -68,12 +74,27 @@ static inline unsigned long page_counter_read(struct page_counter *counter)
 	return atomic_long_read(&counter->usage);
 }
 
-void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages);
-void page_counter_charge(struct page_counter *counter, unsigned long nr_pages);
-bool page_counter_try_charge(struct page_counter *counter,
-			     unsigned long nr_pages,
+void page_counter_cancel(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			    ,long tier
+#endif	
+			    ,unsigned long nr_pages);
+void page_counter_charge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			,long tier
+#endif
+			,unsigned long nr_pages);
+bool page_counter_try_charge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			    ,long tier
+#endif
+			     ,unsigned long nr_pages,
 			     struct page_counter **fail);
-void page_counter_uncharge(struct page_counter *counter, unsigned long nr_pages);
+void page_counter_uncharge(struct page_counter *counter
+#ifdef CONFIG_CGTIER
+			    ,long tier
+#endif
+			    ,unsigned long nr_pages);
 void page_counter_set_min(struct page_counter *counter, unsigned long nr_pages);
 void page_counter_set_low(struct page_counter *counter, unsigned long nr_pages);
 
