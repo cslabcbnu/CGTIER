@@ -2242,6 +2242,9 @@ out:
 }
 
 static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
+#ifdef CONFIG_CGTIER
+			    long tier,
+#endif
 			    unsigned int nr_pages)
 {
 	unsigned int batch = max(MEMCG_CHARGE_BATCH, nr_pages);
@@ -2264,11 +2267,23 @@ retry:
 		batch = nr_pages;
 
 	if (!do_memsw_account() ||
-	    page_counter_try_charge(&memcg->memsw, batch, &counter)) {
-		if (page_counter_try_charge(&memcg->memory, batch, &counter))
+	    page_counter_try_charge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+		    -1,
+#endif
+		    batch, &counter)) {
+		if (page_counter_try_charge(&memcg->memory,
+#ifdef CONFIG_CGTIER
+					tier,
+#endif
+					batch, &counter))
 			goto done_restock;
 		if (do_memsw_account())
-			page_counter_uncharge(&memcg->memsw, batch);
+			page_counter_uncharge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					batch);
 		mem_over_limit = mem_cgroup_from_counter(counter, memory);
 	} else {
 		mem_over_limit = mem_cgroup_from_counter(counter, memsw);
@@ -2369,9 +2384,17 @@ force:
 	 * being freed very soon.  Allow memory usage go over the limit
 	 * temporarily by force charging it.
 	 */
-	page_counter_charge(&memcg->memory, nr_pages);
+	page_counter_charge(&memcg->memory,
+#ifdef CONFIG_CGTIER
+			tier,
+#endif
+		       nr_pages);
 	if (do_memsw_account())
-		page_counter_charge(&memcg->memsw, nr_pages);
+		page_counter_charge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+				-1,
+#endif
+				nr_pages);
 
 	return 0;
 
@@ -2436,12 +2459,19 @@ done_restock:
 }
 
 static inline int try_charge(struct mem_cgroup *memcg, gfp_t gfp_mask,
+#ifdef CONFIG_CGTIER
+			     long tier,
+#endif
 			     unsigned int nr_pages)
 {
 	if (mem_cgroup_is_root(memcg))
 		return 0;
 
-	return try_charge_memcg(memcg, gfp_mask, nr_pages);
+	return try_charge_memcg(memcg, gfp_mask,
+#ifdef CONFIG_CGTIER
+			tier,
+#endif
+			nr_pages);
 }
 
 static void commit_charge(struct folio *folio, struct mem_cgroup *memcg)
@@ -4587,7 +4617,11 @@ static int charge_memcg(struct folio *folio, struct mem_cgroup *memcg,
 {
 	int ret;
 
-	ret = try_charge(memcg, gfp, folio_nr_pages(folio));
+	ret = try_charge(memcg, gfp,
+#ifdef CONFIG_CGTIER
+			node_to_tier[folio_nid(folio)],
+#endif
+			folio_nr_pages(folio));
 	if (ret)
 		goto out;
 
@@ -5036,7 +5070,11 @@ int __mem_cgroup_try_charge_swap(struct folio *folio, swp_entry_t entry)
 	memcg = mem_cgroup_id_get_online(memcg);
 
 	if (!mem_cgroup_is_root(memcg) &&
-	    !page_counter_try_charge(&memcg->swap, nr_pages, &counter)) {
+	    !page_counter_try_charge(&memcg->swap,
+#ifdef CONFIG_CGTIER
+		    -1,
+#endif
+		    nr_pages, &counter)) {
 		memcg_memory_event(memcg, MEMCG_SWAP_MAX);
 		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
 		mem_cgroup_id_put(memcg);
@@ -5069,9 +5107,17 @@ void __mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
 	if (memcg) {
 		if (!mem_cgroup_is_root(memcg)) {
 			if (do_memsw_account())
-				page_counter_uncharge(&memcg->memsw, nr_pages);
+				page_counter_uncharge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+						-1,
+#endif
+						nr_pages);
 			else
-				page_counter_uncharge(&memcg->swap, nr_pages);
+				page_counter_uncharge(&memcg->swap,
+#ifdef CONFIG_CGTIER
+						-1,
+#endif
+						nr_pages);
 		}
 		mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
 		mem_cgroup_id_put_many(memcg, nr_pages);
