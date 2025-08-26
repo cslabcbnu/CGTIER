@@ -626,12 +626,24 @@ void memcg1_swapout(struct folio *folio, swp_entry_t entry)
 	folio->memcg_data = 0;
 
 	if (!mem_cgroup_is_root(memcg))
-		page_counter_uncharge(&memcg->memory, nr_entries);
+		page_counter_uncharge(&memcg->memory,
+#ifdef CONFIG_CGTIER
+				node_to_tier[folio_nid(folio)],
+#endif
+			       	nr_entries);
 
 	if (memcg != swap_memcg) {
 		if (!mem_cgroup_is_root(swap_memcg))
-			page_counter_charge(&swap_memcg->memsw, nr_entries);
-		page_counter_uncharge(&memcg->memsw, nr_entries);
+			page_counter_charge(&swap_memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+				       	nr_entries);
+		page_counter_uncharge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+				nr_entries);
 	}
 
 	/*
@@ -2166,9 +2178,17 @@ void memcg1_account_kmem(struct mem_cgroup *memcg, int nr_pages)
 {
 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys)) {
 		if (nr_pages > 0)
-			page_counter_charge(&memcg->kmem, nr_pages);
+			page_counter_charge(&memcg->kmem,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					nr_pages);
 		else
-			page_counter_uncharge(&memcg->kmem, -nr_pages);
+			page_counter_uncharge(&memcg->kmem,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					-nr_pages);
 	}
 }
 
@@ -2177,7 +2197,11 @@ bool memcg1_charge_skmem(struct mem_cgroup *memcg, unsigned int nr_pages,
 {
 	struct page_counter *fail;
 
-	if (page_counter_try_charge(&memcg->tcpmem, nr_pages, &fail)) {
+	if (page_counter_try_charge(&memcg->tcpmem,
+#ifdef CONFIG_CGTIER
+				-1,
+#endif
+				nr_pages, &fail)) {
 		memcg->tcpmem_pressure = 0;
 		return true;
 	}

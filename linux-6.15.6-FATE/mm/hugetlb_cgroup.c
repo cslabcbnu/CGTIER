@@ -287,6 +287,9 @@ again:
 
 	if (!page_counter_try_charge(
 		    __hugetlb_cgroup_counter_from_cgroup(h_cg, idx, rsvd),
+#ifdef CONFIG_CGTIER
+		    -1,
+#endif
 		    nr_pages, &counter)) {
 		ret = -ENOMEM;
 		hugetlb_event(h_cg, idx, HUGETLB_MAX);
@@ -369,6 +372,9 @@ static void __hugetlb_cgroup_uncharge_folio(int idx, unsigned long nr_pages,
 
 	page_counter_uncharge(__hugetlb_cgroup_counter_from_cgroup(h_cg, idx,
 								   rsvd),
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
 			      nr_pages);
 
 	if (rsvd)
@@ -407,6 +413,9 @@ static void __hugetlb_cgroup_uncharge_cgroup(int idx, unsigned long nr_pages,
 
 	page_counter_uncharge(__hugetlb_cgroup_counter_from_cgroup(h_cg, idx,
 								   rsvd),
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
 			      nr_pages);
 
 	if (rsvd)
@@ -433,6 +442,9 @@ void hugetlb_cgroup_uncharge_counter(struct resv_map *resv, unsigned long start,
 		return;
 
 	page_counter_uncharge(resv->reservation_counter,
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
 			      (end - start) * resv->pages_per_hpage);
 	css_put(resv->css);
 }
@@ -448,6 +460,9 @@ void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
 	if (rg->reservation_counter && resv->pages_per_hpage &&
 	    !resv->reservation_counter) {
 		page_counter_uncharge(rg->reservation_counter,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
 				      nr_pages * resv->pages_per_hpage);
 		/*
 		 * Only do css_put(rg->css) when we delete the entire region

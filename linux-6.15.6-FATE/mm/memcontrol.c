@@ -1832,9 +1832,17 @@ static void drain_stock(struct memcg_stock_pcp *stock)
 		return;
 
 	if (stock_pages) {
-		page_counter_uncharge(&old->memory, stock_pages);
+		page_counter_uncharge(&old->memory,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+				stock_pages);
 		if (do_memsw_account())
-			page_counter_uncharge(&old->memsw, stock_pages);
+			page_counter_uncharge(&old->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					stock_pages);
 
 		WRITE_ONCE(stock->nr_pages, 0);
 	}
@@ -1887,7 +1895,8 @@ static void __refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 		drain_stock(stock);
 }
 
-static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
+static void refill_stock(struct mem_cgroup *memcg,
+			unsigned int nr_pages)
 {
 	unsigned long flags;
 
@@ -1898,9 +1907,17 @@ static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 		 */
 		if (mem_cgroup_is_root(memcg))
 			return;
-		page_counter_uncharge(&memcg->memory, nr_pages);
+		page_counter_uncharge(&memcg->memory,
+#ifdef CONFIG_CGTIER
+				-1,
+#endif
+				nr_pages);
 		if (do_memsw_account())
-			page_counter_uncharge(&memcg->memsw, nr_pages);
+			page_counter_uncharge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					nr_pages);
 		return;
 	}
 	__refill_stock(memcg, nr_pages);
@@ -2400,7 +2417,11 @@ force:
 
 done_restock:
 	if (batch > nr_pages)
-		refill_stock(memcg, batch - nr_pages);
+		refill_stock(memcg,
+#ifdef CONFIG_CGTIER
+			tier,
+#endif
+			batch - nr_pages);
 
 	/*
 	 * If the hierarchy is above the normal consumption range, schedule
@@ -2720,7 +2741,11 @@ static int obj_cgroup_charge_pages(struct obj_cgroup *objcg, gfp_t gfp,
 
 	memcg = get_mem_cgroup_from_objcg(objcg);
 
-	ret = try_charge_memcg(memcg, gfp, nr_pages);
+	ret = try_charge_memcg(memcg, gfp,
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
+			nr_pages);
 	if (ret)
 		goto out;
 
@@ -4729,9 +4754,17 @@ static inline void uncharge_gather_clear(struct uncharge_gather *ug)
 static void uncharge_batch(const struct uncharge_gather *ug)
 {
 	if (ug->nr_memory) {
-		page_counter_uncharge(&ug->memcg->memory, ug->nr_memory);
+		page_counter_uncharge(&ug->memcg->memory,
+#ifdef CONFIG_CGTIER
+				node_to_tier[ug->nid],
+#endif
+				ug->nr_memory);
 		if (do_memsw_account())
-			page_counter_uncharge(&ug->memcg->memsw, ug->nr_memory);
+			page_counter_uncharge(&ug->memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					ug->nr_memory);
 		if (ug->nr_kmem) {
 			mod_memcg_state(ug->memcg, MEMCG_KMEM, -ug->nr_kmem);
 			memcg1_account_kmem(ug->memcg, -ug->nr_kmem);
@@ -4864,9 +4897,17 @@ void mem_cgroup_replace_folio(struct folio *old, struct folio *new)
 
 	/* Force-charge the new page. The old one will be freed soon */
 	if (!mem_cgroup_is_root(memcg)) {
-		page_counter_charge(&memcg->memory, nr_pages);
+		page_counter_charge(&memcg->memory,
+#ifdef CONFIG_CGTIER
+				node_to_tier[folio_nid(new)],
+#endif
+				nr_pages);
 		if (do_memsw_account())
-			page_counter_charge(&memcg->memsw, nr_pages);
+			page_counter_charge(&memcg->memsw,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+					nr_pages);
 	}
 
 	css_get(&memcg->css);
@@ -4963,7 +5004,11 @@ bool mem_cgroup_charge_skmem(struct mem_cgroup *memcg, unsigned int nr_pages,
 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys))
 		return memcg1_charge_skmem(memcg, nr_pages, gfp_mask);
 
-	if (try_charge_memcg(memcg, gfp_mask, nr_pages) == 0) {
+	if (try_charge_memcg(memcg, gfp_mask,
+#ifdef CONFIG_CGTIER
+					-1,
+#endif
+				nr_pages) == 0) {
 		mod_memcg_state(memcg, MEMCG_SOCK, nr_pages);
 		return true;
 	}

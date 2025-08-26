@@ -573,7 +573,11 @@ void dmem_cgroup_uncharge(struct dmem_cgroup_pool_state *pool, u64 size)
 	if (!pool)
 		return;
 
-	page_counter_uncharge(&pool->cnt, size);
+	page_counter_uncharge(&pool->cnt,
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
+			size);
 	css_put(&pool->cs->css);
 }
 EXPORT_SYMBOL_GPL(dmem_cgroup_uncharge);
@@ -622,7 +626,11 @@ int dmem_cgroup_try_charge(struct dmem_cgroup_region *region, u64 size,
 		goto err;
 	}
 
-	if (!page_counter_try_charge(&pool->cnt, size, &fail)) {
+	if (!page_counter_try_charge(&pool->cnt,
+#ifdef CONFIG_CGTIER
+				-1,
+#endif
+				size, &fail)) {
 		if (ret_limit_pool) {
 			*ret_limit_pool = container_of(fail, struct dmem_cgroup_pool_state, cnt);
 			css_get(&(*ret_limit_pool)->cs->css);
