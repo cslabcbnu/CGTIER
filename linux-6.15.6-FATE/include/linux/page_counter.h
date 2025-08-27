@@ -73,6 +73,12 @@ static inline unsigned long page_counter_read(struct page_counter *counter)
 {
 	return atomic_long_read(&counter->usage);
 }
+#ifdef CONFIG_CGTIER
+static inline unsigned long page_counter_read_per_tier(struct page_counter *counter, long tier)
+{
+	return atomic_long_read(&counter->usage_per_tier[tier]);
+}
+#endif
 
 void page_counter_cancel(struct page_counter *counter,
 #ifdef CONFIG_CGTIER

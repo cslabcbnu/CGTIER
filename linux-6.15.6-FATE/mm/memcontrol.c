@@ -68,6 +68,7 @@
 #include <net/ip.h>
 #include "slab.h"
 #include "memcontrol-v1.h"
+#include <linux/memory-tiers.h>
 
 #include <linux/uaccess.h>
 
@@ -2417,11 +2418,7 @@ force:
 
 done_restock:
 	if (batch > nr_pages)
-		refill_stock(memcg,
-#ifdef CONFIG_CGTIER
-			tier,
-#endif
-			batch - nr_pages);
+		refill_stock(memcg, batch - nr_pages);
 
 	/*
 	 * If the hierarchy is above the normal consumption range, schedule
@@ -4522,12 +4519,38 @@ static ssize_t memory_reclaim(struct kernfs_open_file *of, char *buf,
 	return nbytes;
 }
 
+#ifdef CONFIG_CGTIER
+static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
+			       struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	long tier_id = (long)cft->private;
+	if (tier_id < 0 || tier_id >= 4)
+        return 0;
+
+	return (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE;
+}
+
+#define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
+    {                                       \
+        .name = "tiered_memory_" #_tier "_current", \
+        .read_u64 = tiered_memory_current_read, \
+        .private = (void *)_tier,           \
+    }
+#endif
+
 static struct cftype memory_files[] = {
 	{
 		.name = "current",
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_u64 = memory_current_read,
 	},
+#ifdef CONFIG_CGTIER
+	TIERED_MEMORY_CURRENT_CFTYPE(0),
+	TIERED_MEMORY_CURRENT_CFTYPE(1),
+	TIERED_MEMORY_CURRENT_CFTYPE(2),
+	TIERED_MEMORY_CURRENT_CFTYPE(3),
+#endif
 	{
 		.name = "peak",
 		.flags = CFTYPE_NOT_ON_ROOT,
