@@ -4527,6 +4527,7 @@ static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
 	long tier_id = (long)cft->private;
 	if (tier_id < 0 || tier_id >= 4)
         return 0;
+	printk("test, read %ld, val : %lld \n", tier_id, (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE);
 
 	return (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE;
 }
@@ -5100,6 +5101,9 @@ static int __init mem_cgroup_init(void)
 	for_each_possible_cpu(cpu)
 		INIT_WORK(&per_cpu_ptr(&memcg_stock, cpu)->work,
 			  drain_local_stock);
+
+	node_to_tier = kcalloc(nr_node_ids, sizeof(int), GFP_KERNEL);
+	for (int i = 0; i < nr_node_ids; i++) node_to_tier[i] = -1;
 
 	return 0;
 }

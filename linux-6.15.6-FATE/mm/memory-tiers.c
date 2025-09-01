@@ -738,7 +738,6 @@ static int __init memory_tier_late_init(void)
 	establish_demotion_targets();
 	put_online_mems();
 
-	node_to_tier = kcalloc(nr_node_ids, sizeof(int), GFP_KERNEL);
 	for (int i = 0; i < nr_node_ids; i++) {
 		if (node_state(i, N_ONLINE))
 			node_to_tier[i] = get_memtier_index(i);

@@ -59,6 +59,7 @@ void page_counter_cancel(struct page_counter *counter,
 {
 	long new;
 
+
 #ifdef CONFIG_CGTIER
 	if (tier + 1) {
 		new = atomic_long_sub_return(nr_pages, &counter->usage_per_tier[tier]);
