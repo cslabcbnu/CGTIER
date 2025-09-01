@@ -5057,6 +5057,29 @@ void mem_cgroup_uncharge_skmem(struct mem_cgroup *memcg, unsigned int nr_pages)
 	refill_stock(memcg, nr_pages);
 }
 
+#ifdef CONFIG_CGTIER
+void memcg_move_folio_tier(struct folio *folio, int src_nid, int dst_nid)
+{
+        struct mem_cgroup *memcg;
+        int src_tier, dst_tier;
+
+        if (mem_cgroup_disabled())
+                return;
+
+        src_tier = node_to_tier[src_nid];
+        dst_tier = node_to_tier[dst_nid];
+        if (src_tier == dst_tier)
+                return;
+
+        memcg = folio_memcg(folio);
+        if (!memcg)
+                return;
+
+        page_counter_move_tier(&memcg->memory, src_tier, dst_tier,
+                               folio_nr_pages(folio));
+}
+#endif
+
 static int __init cgroup_memory(char *s)
 {
 	char *token;

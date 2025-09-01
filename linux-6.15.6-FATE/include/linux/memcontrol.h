@@ -1736,6 +1736,10 @@ static inline void count_objcg_events(struct obj_cgroup *objcg,
 	rcu_read_unlock();
 }
 
+#ifdef CONFIG_CGTIER
+void memcg_move_folio_tier(struct folio *folio, int src_nid, int dst_nid);
+#endif
+
 #else
 static inline bool mem_cgroup_kmem_disabled(void)
 {

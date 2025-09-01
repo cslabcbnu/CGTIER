@@ -136,4 +136,9 @@ static inline void page_counter_calculate_protection(struct page_counter *root,
 						     bool recursive_protection) {}
 #endif
 
+#ifdef CONFIG_CGTIER
+void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_tier,
+                            unsigned long nr_pages);
+#endif
+
 #endif /* _LINUX_PAGE_COUNTER_H */

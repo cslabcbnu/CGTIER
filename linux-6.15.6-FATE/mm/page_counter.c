@@ -507,4 +507,20 @@ void page_counter_calculate_protection(struct page_counter *root,
 			atomic_long_read(&parent->children_low_usage),
 			recursive_protection));
 }
+
+#ifdef CONFIG_CGTIER
+void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_tier,
+                            unsigned long nr_pages)
+{
+        struct page_counter *c;
+
+        if (src_tier == dst_tier)
+                return;
+
+        for (c = counter; c; c = c->parent) {
+                atomic_long_sub(nr_pages, &c->usage_per_tier[src_tier]);
+                atomic_long_add(nr_pages, &c->usage_per_tier[dst_tier]);
+        }
+}
+#endif
 #endif /* CONFIG_MEMCG || CONFIG_CGROUP_DMEM */
