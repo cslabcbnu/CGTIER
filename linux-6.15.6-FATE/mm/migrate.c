@@ -43,6 +43,7 @@
 #include <linux/memory.h>
 #include <linux/sched/sysctl.h>
 #include <linux/memory-tiers.h>
+#include <linux/memcontrol.h>
 #include <linux/pagewalk.h>
 
 #include <asm/tlbflush.h>
@@ -1078,6 +1079,9 @@ static int move_to_new_folio(struct folio *dst, struct folio *src,
 	 * src is freed; but stats require that PageAnon be left as PageAnon.
 	 */
 	if (rc == MIGRATEPAGE_SUCCESS) {
+#ifdef CONFIG_CGTIER
+		memcg_move_folio_tier(dst, folio_nid(src), folio_nid(dst));
+#endif
 		if (__folio_test_movable(src)) {
 			VM_BUG_ON_FOLIO(!folio_test_isolated(src), src);
 
