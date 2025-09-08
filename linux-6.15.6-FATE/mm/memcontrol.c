@@ -2187,7 +2187,12 @@ void mem_cgroup_handle_over_high(gfp_t gfp_mask
 		return;
 
 	memcg = get_mem_cgroup_from_mm(current->mm);
+#ifdef CONFIG_CGTIER
+	if (tier + 1) current->memcg_nr_pages_over_high_per_tier[tier] = 0;
+	else current->memcg_nr_pages_over_high = 0;
+#else
 	current->memcg_nr_pages_over_high = 0;
+#endif
 
 retry_reclaim:
 	/*
