@@ -888,7 +888,11 @@ unsigned long mem_cgroup_get_zone_lru_size(struct lruvec *lruvec,
 	return READ_ONCE(mz->lru_zone_size[zone_idx][lru]);
 }
 
-void mem_cgroup_handle_over_high(gfp_t gfp_mask);
+void mem_cgroup_handle_over_high(gfp_t gfp_mask
+#ifdef CONFIG_CGTIER
+								, long tier
+#endif
+);
 
 unsigned long mem_cgroup_get_max(struct mem_cgroup *memcg);
 

@@ -2490,8 +2490,8 @@ done_restock:
 	 */
 	if (
 #ifdef CONFIG_CGTIER
-	((tier + 1) && current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH)
-	|| (!(tier + 1) && current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH)
+	(((tier + 1) && current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH)
+	|| (!(tier + 1) && current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH))
 #else
 	current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH 
 #endif
@@ -4569,8 +4569,10 @@ static int tiered_memory_high_show(struct seq_file *m, void *v)
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
 	long tier_id = (long)m->private;
 
-	if (tier_id < 0 || tier_id >= 4)
-		return seq_puts(m, "0\n");
+	if (tier_id < 0 || tier_id >= 4) {
+		seq_puts(m, "0\n");
+		return 0;
+	}
 
 	return seq_puts_memcg_tunable(m,
 		READ_ONCE(memcg->memory.high_per_tier[tier_id]));
@@ -4619,13 +4621,16 @@ static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
 
 		if (!reclaimed && !nr_retries--)
 			break;
+	}
+	memcg_wb_domain_size_changed(memcg);
+	return nbytes;
 }
 
 #define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
 	{                                       \
         .name = "tiered_memory_" #_tier "_current", \
         .read_u64 = tiered_memory_current_read, \
-        .private = (void *)_tier,           \
+        .private = _tier,           \
 	}
 
 #define TIERED_MEMORY_HIGH_CFTYPE(_tier)				 \
@@ -4634,7 +4639,7 @@ static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
 		.flags = CFTYPE_NOT_ON_ROOT,				 \
 		.seq_show = tiered_memory_high_show,			 \
 		.write = tiered_memory_high_write,			 \
-		.private = (void *)_tier,				 \
+		.private = _tier,				 \
 	}
 
 #endif
