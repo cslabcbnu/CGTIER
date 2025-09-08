@@ -1543,6 +1543,9 @@ struct task_struct {
 #ifdef CONFIG_MEMCG
 	/* Number of pages to reclaim on returning to userland: */
 	unsigned int			memcg_nr_pages_over_high;
+#ifdef CONFIG_CGTIER
+	unsigned int			memcg_nr_pages_over_high_per_tier[4];
+#endif
 
 	/* Used by memcontrol for targeted memcg charge: */
 	struct mem_cgroup		*active_memcg;

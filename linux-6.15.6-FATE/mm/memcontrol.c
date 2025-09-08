@@ -2166,12 +2166,19 @@ static unsigned long calculate_high_delay(struct mem_cgroup *memcg,
  * try_charge() (context permitting), as well as from the userland
  * return path where reclaim is always able to block.
  */
-void mem_cgroup_handle_over_high(gfp_t gfp_mask)
+void mem_cgroup_handle_over_high(gfp_t gfp_mask
+#ifdef CONFIG_CGTIER
+				, long tier
+#endif
+		)
 {
 	unsigned long penalty_jiffies;
 	unsigned long pflags;
 	unsigned long nr_reclaimed;
 	unsigned int nr_pages = current->memcg_nr_pages_over_high;
+#ifdef CONFIG_CGTIER
+	if (tier + 1) nr_pages = current->memcg_nr_pages_over_high_per_tier[tier];
+#endif
 	int nr_retries = MAX_RECLAIM_RETRIES;
 	struct mem_cgroup *memcg;
 	bool in_retry = false;
@@ -2432,8 +2439,15 @@ done_restock:
 	do {
 		bool mem_high, swap_high;
 
+#ifdef CONFIG_CGTIER
+		if (tier + 1) mem_high = page_counter_read_per_tier(&memcg->memory, tier) >
+			READ_ONCE(memcg->memory.high_per_tier[tier]);
+		else mem_high = page_counter_read(&memcg->memory) >
+			READ_ONCE(memcg->memory.high);
+#else
 		mem_high = page_counter_read(&memcg->memory) >
 			READ_ONCE(memcg->memory.high);
+#endif
 		swap_high = page_counter_read(&memcg->swap) >
 			READ_ONCE(memcg->swap.high);
 
@@ -2456,7 +2470,12 @@ done_restock:
 			 * and distribute reclaim work and delay penalties
 			 * based on how much each task is actually allocating.
 			 */
+#ifdef CONFIG_CGTIER
+			if (tier + 1) current->memcg_nr_pages_over_high_per_tier[tier] += batch;
+			else current->memcg_nr_pages_over_high += batch;
+#else
 			current->memcg_nr_pages_over_high += batch;
+#endif
 			set_notify_resume(current);
 			break;
 		}
@@ -2469,10 +2488,19 @@ done_restock:
 	 * kernel. If this is successful, the return path will see it
 	 * when it rechecks the overage and simply bail out.
 	 */
-	if (current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH &&
-	    !(current->flags & PF_MEMALLOC) &&
-	    gfpflags_allow_blocking(gfp_mask))
-		mem_cgroup_handle_over_high(gfp_mask);
+	if (
+#ifdef CONFIG_CGTIER
+	((tier + 1) && current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH)
+	|| (!(tier + 1) && current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH)
+#else
+	current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH 
+#endif
+	&& !(current->flags & PF_MEMALLOC) && gfpflags_allow_blocking(gfp_mask))
+		mem_cgroup_handle_over_high(gfp_mask
+#ifdef CONFIG_CGTIER
+				, tier
+#endif
+				);
 	return 0;
 }
 
@@ -3726,6 +3754,10 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 		return ERR_CAST(memcg);
 
 	page_counter_set_high(&memcg->memory, PAGE_COUNTER_MAX);
+#ifdef CONFIG_CGTIER
+	for (long i = 0; i < 4; i++)
+		page_counter_set_high_per_tier(&memcg->memory, PAGE_COUNTER_MAX, i);
+#endif
 	memcg1_soft_limit_reset(memcg);
 #ifdef CONFIG_ZSWAP
 	memcg->zswap_max = PAGE_COUNTER_MAX;
@@ -4532,12 +4564,79 @@ static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
 	return (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE;
 }
 
+static int tiered_memory_high_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+	long tier_id = (long)m->private;
+
+	if (tier_id < 0 || tier_id >= 4)
+		return seq_puts(m, "0\n");
+
+	return seq_puts_memcg_tunable(m,
+		READ_ONCE(memcg->memory.high_per_tier[tier_id]));
+}
+
+static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
+					char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned int nr_retries = MAX_RECLAIM_RETRIES;
+	bool drained = false;
+	unsigned long high;
+	long tier_id = (long)of_cft(of)->private;
+	int err;
+
+	if (tier_id < 0 || tier_id >= 4)
+		return -EINVAL;
+
+	buf = strstrip(buf);
+	err = page_counter_memparse(buf, "max", &high);
+	if (err)
+		return err;
+	page_counter_set_high_per_tier(&memcg->memory, high, tier_id);
+
+	for (;;) {
+		unsigned long nr_pages = page_counter_read_per_tier(&memcg->memory, tier_id);
+		unsigned long reclaimed;
+
+		if (nr_pages <= high)
+			break;
+
+		if (signal_pending(current))
+			break;
+
+		if (!drained) {
+			drain_all_stock(memcg);
+			drained = true;
+			continue;
+		}
+
+		reclaimed = try_to_free_mem_cgroup_pages(memcg,
+					nr_pages - high,
+					GFP_KERNEL,
+					MEMCG_RECLAIM_MAY_SWAP,
+					NULL);
+
+		if (!reclaimed && !nr_retries--)
+			break;
+}
+
 #define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
-    {                                       \
+	{                                       \
         .name = "tiered_memory_" #_tier "_current", \
         .read_u64 = tiered_memory_current_read, \
         .private = (void *)_tier,           \
-    }
+	}
+
+#define TIERED_MEMORY_HIGH_CFTYPE(_tier)				 \
+	{								 \
+		.name = "tiered_memory_" #_tier "_high",		 \
+		.flags = CFTYPE_NOT_ON_ROOT,				 \
+		.seq_show = tiered_memory_high_show,			 \
+		.write = tiered_memory_high_write,			 \
+		.private = (void *)_tier,				 \
+	}
+
 #endif
 
 static struct cftype memory_files[] = {
@@ -4578,6 +4677,12 @@ static struct cftype memory_files[] = {
 		.seq_show = memory_high_show,
 		.write = memory_high_write,
 	},
+#ifdef CONFIG_CGTIER
+	TIERED_MEMORY_HIGH_CFTYPE(0),
+	TIERED_MEMORY_HIGH_CFTYPE(1),
+	TIERED_MEMORY_HIGH_CFTYPE(2),
+	TIERED_MEMORY_HIGH_CFTYPE(3),
+#endif
 	{
 		.name = "max",
 		.flags = CFTYPE_NOT_ON_ROOT,

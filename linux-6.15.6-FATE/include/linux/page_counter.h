@@ -42,6 +42,9 @@ struct page_counter {
 	unsigned long min;
 	unsigned long low;
 	unsigned long high;
+#ifdef CONFIG_CGTIER
+        unsigned long high_per_tier[4];
+#endif
 	unsigned long max;
 	struct page_counter *parent;
 } ____cacheline_internodealigned_in_smp;
@@ -139,6 +142,10 @@ static inline void page_counter_calculate_protection(struct page_counter *root,
 #ifdef CONFIG_CGTIER
 void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_tier,
                             unsigned long nr_pages);
+static inline void page_counter_set_high_per_tier(struct page_counter *counter, unsigned long nr_pages, long tier)
+{
+				WRITE_ONCE(counter->high_per_tier[tier], nr_pages);
+}
 #endif
 
 #endif /* _LINUX_PAGE_COUNTER_H */
