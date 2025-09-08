@@ -4562,9 +4562,7 @@ static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 	long tier_id = (long)cft->private;
-	if (tier_id < 0 || tier_id >= 4)
-        return 0;
-	printk("test, read %ld, val : %lld \n", tier_id, (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE);
+	if (tier_id < 0 || tier_id >= 4) return 0;
 
 	return (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE;
 }
@@ -4572,7 +4570,10 @@ static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
 static int tiered_memory_high_show(struct seq_file *m, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
-	long tier_id = (long)m->private;
+	struct cftype *cft = seq_cft(m);
+	long tier_id = (long)cft->private;
+
+	printk("Test show %d\n", tier_id);
 
 	if (tier_id < 0 || tier_id >= 4) {
 		seq_puts(m, "0\n");
@@ -4601,6 +4602,7 @@ static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
 	if (err)
 		return err;
 	page_counter_set_high_per_tier(&memcg->memory, high, tier_id);
+	printk("Test High Write, %ld input, %ld result\n", high, READ_ONCE(memcg->memory.high_per_tier[tier_id]));
 
 	for (;;) {
 		unsigned long nr_pages = page_counter_read_per_tier(&memcg->memory, tier_id);
