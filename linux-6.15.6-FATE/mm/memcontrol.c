@@ -2445,8 +2445,10 @@ done_restock:
 		bool mem_high, swap_high;
 
 #ifdef CONFIG_CGTIER
-		if (tier + 1) mem_high = page_counter_read_per_tier(&memcg->memory, tier) >
+		if (tier + 1) {
+			mem_high = page_counter_read_per_tier(&memcg->memory, tier) >
 			READ_ONCE(memcg->memory.high_per_tier[tier]);
+		}
 		else mem_high = page_counter_read(&memcg->memory) >
 			READ_ONCE(memcg->memory.high);
 #else
@@ -2493,10 +2495,11 @@ done_restock:
 	 * kernel. If this is successful, the return path will see it
 	 * when it rechecks the overage and simply bail out.
 	 */
+
 	if (
 #ifdef CONFIG_CGTIER
-	(((tier + 1) && current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH)
-	|| (!(tier + 1) && current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH))
+	(((tier + 1) && (current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH))
+	|| (!(tier + 1) && (current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH)))
 #else
 	current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH 
 #endif
@@ -3926,6 +3929,10 @@ static void mem_cgroup_css_reset(struct cgroup_subsys_state *css)
 	page_counter_set_min(&memcg->memory, 0);
 	page_counter_set_low(&memcg->memory, 0);
 	page_counter_set_high(&memcg->memory, PAGE_COUNTER_MAX);
+#ifdef CONFIG_CGTIER
+	for (long i = 0; i < 4; i++) 
+		page_counter_set_high_per_tier(&memcg->memory, PAGE_COUNTER_MAX, i); 
+#endif
 	memcg1_soft_limit_reset(memcg);
 	page_counter_set_high(&memcg->swap, PAGE_COUNTER_MAX);
 	memcg_wb_domain_size_changed(memcg);
@@ -4573,7 +4580,6 @@ static int tiered_memory_high_show(struct seq_file *m, void *v)
 	struct cftype *cft = seq_cft(m);
 	long tier_id = (long)cft->private;
 
-	printk("Test show %d\n", tier_id);
 
 	if (tier_id < 0 || tier_id >= 4) {
 		seq_puts(m, "0\n");
@@ -4602,7 +4608,6 @@ static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
 	if (err)
 		return err;
 	page_counter_set_high_per_tier(&memcg->memory, high, tier_id);
-	printk("Test High Write, %ld input, %ld result\n", high, READ_ONCE(memcg->memory.high_per_tier[tier_id]));
 
 	for (;;) {
 		unsigned long nr_pages = page_counter_read_per_tier(&memcg->memory, tier_id);
@@ -4636,6 +4641,7 @@ static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
 #define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
 	{                                       \
         .name = "tiered_memory_" #_tier "_current", \
+	.flags = CFTYPE_NOT_ON_ROOT,		\
         .read_u64 = tiered_memory_current_read, \
         .private = _tier,           \
 	}

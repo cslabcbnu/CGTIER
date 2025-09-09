@@ -144,7 +144,7 @@ void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_
                             unsigned long nr_pages);
 static inline void page_counter_set_high_per_tier(struct page_counter *counter, unsigned long nr_pages, long tier)
 {
-				WRITE_ONCE(counter->high_per_tier[tier], nr_pages);
+	WRITE_ONCE(counter->high_per_tier[tier], nr_pages);
 }
 #endif
 
