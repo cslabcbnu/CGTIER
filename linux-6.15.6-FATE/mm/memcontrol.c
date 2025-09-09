@@ -1990,6 +1990,9 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 }
 
 static unsigned long reclaim_high(struct mem_cgroup *memcg,
+#ifdef CONFIG_CGTIER
+				  long tier,
+#endif
 				  unsigned int nr_pages,
 				  gfp_t gfp_mask)
 {
@@ -1998,10 +2001,23 @@ static unsigned long reclaim_high(struct mem_cgroup *memcg,
 	do {
 		unsigned long pflags;
 
+#ifdef CONFIG_CGTIER
+		if (tier + 1) {
+			if (page_counter_read_per_tier(&memcg->memory, tier) <= 
+					READ_ONCE(memcg->memory.high_per_tier[tier]))
+				continue;
+		}
+		else {
+			if (page_counter_read(&memcg->memory) <=
+					READ_ONCE(memcg->memory.high))
+				continue;
+		}
+#else
+
 		if (page_counter_read(&memcg->memory) <=
 		    READ_ONCE(memcg->memory.high))
 			continue;
-
+#endif
 		memcg_memory_event(memcg, MEMCG_HIGH);
 
 		psi_memstall_enter(&pflags);
@@ -2021,7 +2037,11 @@ static void high_work_func(struct work_struct *work)
 	struct mem_cgroup *memcg;
 
 	memcg = container_of(work, struct mem_cgroup, high_work);
-	reclaim_high(memcg, MEMCG_CHARGE_BATCH, GFP_KERNEL);
+	reclaim_high(memcg,
+#ifdef CONFIG_CGTIER
+			-1,
+#endif
+			MEMCG_CHARGE_BATCH, GFP_KERNEL);
 }
 
 /*
@@ -2177,7 +2197,9 @@ void mem_cgroup_handle_over_high(gfp_t gfp_mask
 	unsigned long nr_reclaimed;
 	unsigned int nr_pages = current->memcg_nr_pages_over_high;
 #ifdef CONFIG_CGTIER
-	if (tier + 1) nr_pages = current->memcg_nr_pages_over_high_per_tier[tier];
+	if (tier + 1) {
+		nr_pages = current->memcg_nr_pages_over_high_per_tier[tier];
+	}
 #endif
 	int nr_retries = MAX_RECLAIM_RETRIES;
 	struct mem_cgroup *memcg;
@@ -2216,6 +2238,9 @@ retry_reclaim:
 	 * allocator run every time an allocation is made.
 	 */
 	nr_reclaimed = reclaim_high(memcg,
+#ifdef CONFIG_CGTIER
+				    tier,
+#endif
 				    in_retry ? SWAP_CLUSTER_MAX : nr_pages,
 				    gfp_mask);
 
