@@ -2002,21 +2002,28 @@ static unsigned long reclaim_high(struct mem_cgroup *memcg,
 		unsigned long pflags;
 
 #ifdef CONFIG_CGTIER
-		if (tier + 1) {
-			if (page_counter_read_per_tier(&memcg->memory, tier) <= 
-					READ_ONCE(memcg->memory.high_per_tier[tier]))
-				continue;
+		if ((tier + 1) && (page_counter_read_per_tier(&memcg->memory, tier) <= 
+					READ_ONCE(memcg->memory.high_per_tier[tier])))
+			continue;
+		if (!(tier + 1)) {
+			for (long i = 0; i < 4; i++) {
+				if (page_counter_read_per_tier(&memcg->memory, i) >
+                                        READ_ONCE(memcg->memory.high_per_tier[i])) {
+					tier = i;
+					goto reclaim_path;
+				}
+			}
 		}
-		else {
-			if (page_counter_read(&memcg->memory) <=
-					READ_ONCE(memcg->memory.high))
-				continue;
-		}
+		if (!(tier+1) && (page_counter_read(&memcg->memory) <=
+		    READ_ONCE(memcg->memory.high)))
+			continue;
 #else
-
 		if (page_counter_read(&memcg->memory) <=
 		    READ_ONCE(memcg->memory.high))
 			continue;
+#endif
+#ifdef CONFIG_CGTIER
+reclaim_path:
 #endif
 		memcg_memory_event(memcg, MEMCG_HIGH);
 
@@ -2115,13 +2122,26 @@ static u64 calculate_overage(unsigned long usage, unsigned long high)
 	return div64_u64(overage, high);
 }
 
-static u64 mem_find_max_overage(struct mem_cgroup *memcg)
+static u64 mem_find_max_overage(struct mem_cgroup *memcg
+#ifdef CONFIG_CGTIER
+				,long tier
+#endif
+		)
 {
 	u64 overage, max_overage = 0;
 
 	do {
+#ifdef CONFIG_CGTIER
+		if (tier + 1)
+			overage = calculate_overage(page_counter_read_per_tier(&memcg->memory, tier),
+					READ_ONCE(memcg->memory.high_per_tier[tier]));
+		else 
+			overage = calculate_overage(page_counter_read(&memcg->memory),
+					    READ_ONCE(memcg->memory.high));
+#else
 		overage = calculate_overage(page_counter_read(&memcg->memory),
 					    READ_ONCE(memcg->memory.high));
+#endif
 		max_overage = max(overage, max_overage);
 	} while ((memcg = parent_mem_cgroup(memcg)) &&
 		 !mem_cgroup_is_root(memcg));
@@ -2249,7 +2269,11 @@ retry_reclaim:
 	 * allocators proactively to slow down excessive growth.
 	 */
 	penalty_jiffies = calculate_high_delay(memcg, nr_pages,
-					       mem_find_max_overage(memcg));
+					       mem_find_max_overage(memcg
+#ifdef CONFIG_CGTIER
+						, tier
+#endif
+						       ));
 
 	penalty_jiffies += calculate_high_delay(memcg, nr_pages,
 						swap_find_max_overage(memcg));
