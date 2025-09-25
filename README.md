@@ -1,35 +1,36 @@
-# FATE: Fairness-aware Allocation of containers in Tiered-memory Environment
+# CGTIER: Implementation and Evaluation of Cgroup Function for Active Memory Constraints in Tiered Memory Environment
 
-**FATE** is a system designed to achieve fair and efficient allocation of containers in a NUMA (Non-Uniform Memory Access) tiered-memory environment. It modifies the Linux kernel's `memcg` (memory control group) to track memory usage on a per-tier basis and utilizes this information to schedule containers to their optimal locations.
+[![Kernel Version](https://img.shields.io/badge/Linux%20Kernel-6.15.6-blue.svg)](https://www.kernel.org/)
 
+**CGTIER** is a novel Linux kernel module designed for tier-aware memory control and isolation per cgroup in heterogeneous memory systems composed of DRAM, PMEM, CXL, and other memory types.
 
-## 🎯 Core Goals
+## 🧐 The Problem
 
-* **Maximize Efficiency in Tiered Memory:** To improve overall system performance by allocating containers to the most suitable memory tier (e.g., DRAM, PMem, CXL) based on their characteristics.
-* **Ensure Fairness Among Containers:** To provide a stable execution environment for all containers by implementing fair allocation policies that prevent any single container from monopolizing high-performance memory.
+Modern computing environments are increasingly adopting a **tiered memory architecture**, which combines high-speed DRAM with large-capacity PMEM or CXL memory. However, the existing Cgroup memory controller in the Linux kernel has a fundamental limitation: it is not tier-aware.
 
+* **No Tier Distinction:** It treats all memory as a single, flat tier, making fine-grained, per-tier control impossible.
+* **Infinite Reclamation Loop:** When memory pages are demoted from a higher tier (e.g., DRAM) to a lower tier (e.g., CXL), the cgroup's page counter does not decrease. This tricks the kernel into believing the memory limit has been reached, triggering an unnecessary and infinite memory reclamation process that causes severe performance degradation.
 
-## ✨ Key Features
+## ✨ Our Solution: CGTIER
 
-### 1. Per-Tier Memory Usage Tracking in `memcg`
+To address these issues, we propose **CGTIER**. By implementing the following core features into the Linux kernel (v6.15.6), CGTIER provides a cgroup memory controller optimized for **tiered memory environments**.
 
-We have extended the Linux kernel's `memcg` functionality to monitor container memory usage for each NUMA node and memory tier.
+### Key Features
 
-* **Tier-specific `memory.current`:** Allows real-time tracking of how much memory a container is using on each specific memory tier.
-* **Tier-specific `memory.high`:** Implement a per-tier memory.high in memcg to enforce a soft limit on memory usage for specific tiers.
+* **🎯 Per-tier Page Counters:** Implements separate page counters for each memory tier, allowing for precise tracking of how much memory each cgroup is using on a per-tier basis.
+* **🔧 New Control Interface (`tiered_N_high`):** Introduces a new control file, `memory.tiered_N.high` (where N is the tier ID), to the cgroupfs. This allows users to directly set a soft memory limit for each tier.
+* **🧠 Automatic Demotion:** When a cgroup's memory usage on a specific tier reaches the configured `tiered_N_high` limit, excess memory pages are automatically demoted to the next lower tier. This ensures service continuity and prevents performance degradation.
 
-This feature is crucial for analyzing the memory access patterns of containers and serves as the core data source for our fair allocation system.
+## 🚀 Performance Evaluation
 
-### 2. Fairness-aware Container Placement System (In Development)
+We validated the performance of CGTIER using a variety of benchmarks, including **SHINOBI**, **7-zip**, and **HPL**.
 
-We are currently developing a system that leverages the per-tier memory usage data to place containers on the most appropriate NUMA node and memory tier.
+\* **SHINOBI** Benchmark (https://github.com/cslabcbnu/SHINOBI)
 
-* **Real-time Monitoring:** Continuously monitors the memory usage of each container across different tiers.
-* **Intelligent Placement Policies:** Will dynamically schedule or migrate containers based on policies that consider both fairness and performance.
+* **Precise Control:** CGTIER **accurately** enforced the user-defined per-tier memory limits and successfully demoted excess memory to lower tiers as intended.
+* **Minimal Overhead:** The performance impact on CPU-intensive workloads was negligible. CGTIER demonstrated **insignificant overhead** compared to the vanilla Linux kernel.
+* **Performance Improvement:** By resolving the unnecessary reclamation and performance degradation issues found in the default kernel, CGTIER improves overall system stability and efficiency.
 
+## 💡 Future Work
 
-## 🚧 Project Status
-
-* **`memcg` Modification & Per-Tier Tracking:** **Done**
-* **Fairness-aware Container Placement System:** **In Progress**
-* **Project Based on Linux 6.15.6**
+CGTIER presents a practical and efficient solution for isolating and limiting memory resources for workloads in **tiered memory environments**. Our future plans involve **integrating CGTIER with container runtimes (e.g., Docker, Kubernetes)** to enable more granular and efficient memory management in cloud and data center environments.
