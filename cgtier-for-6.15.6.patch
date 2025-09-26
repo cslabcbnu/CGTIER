@@ -1,0 +1,1225 @@
+diff -Naur linux-6.15.6/Makefile linux-6.15.6-CGTIER/Makefile
+--- linux-6.15.6/Makefile	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/Makefile	2025-09-25 06:28:59.891153738 +0000
+@@ -2,7 +2,7 @@
+ VERSION = 6
+ PATCHLEVEL = 15
+ SUBLEVEL = 6
+-EXTRAVERSION =
++EXTRAVERSION = -cgtier
+ NAME = Baby Opossum Posse
+ 
+ # *DOCUMENTATION*
+diff -Naur linux-6.15.6/include/linux/memcontrol.h linux-6.15.6-CGTIER/include/linux/memcontrol.h
+--- linux-6.15.6/include/linux/memcontrol.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/include/linux/memcontrol.h	2025-09-25 06:29:04.501520193 +0000
+@@ -271,6 +271,7 @@
+ 	struct lru_gen_mm_list mm_list;
+ #endif
+ 
++
+ #ifdef CONFIG_MEMCG_V1
+ 	/* Legacy consumer-oriented counters */
+ 	struct page_counter kmem;		/* v1 only */
+@@ -888,7 +889,11 @@
+ 	return READ_ONCE(mz->lru_zone_size[zone_idx][lru]);
+ }
+ 
+-void mem_cgroup_handle_over_high(gfp_t gfp_mask);
++void mem_cgroup_handle_over_high(gfp_t gfp_mask
++#ifdef CONFIG_CGTIER
++								, long tier
++#endif
++);
+ 
+ unsigned long mem_cgroup_get_max(struct mem_cgroup *memcg);
+ 
+@@ -1736,6 +1741,10 @@
+ 	rcu_read_unlock();
+ }
+ 
++#ifdef CONFIG_CGTIER
++void memcg_move_folio_tier(struct folio *folio, int src_nid, int dst_nid);
++#endif
++
+ #else
+ static inline bool mem_cgroup_kmem_disabled(void)
+ {
+diff -Naur linux-6.15.6/include/linux/memory-tiers.h linux-6.15.6-CGTIER/include/linux/memory-tiers.h
+--- linux-6.15.6/include/linux/memory-tiers.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/include/linux/memory-tiers.h	2025-09-25 06:29:04.501520193 +0000
+@@ -34,6 +34,7 @@
+ };
+ 
+ struct access_coordinate;
++extern int* node_to_tier;
+ 
+ #ifdef CONFIG_NUMA
+ extern bool numa_demotion_enabled;
+diff -Naur linux-6.15.6/include/linux/page_counter.h linux-6.15.6-CGTIER/include/linux/page_counter.h
+--- linux-6.15.6/include/linux/page_counter.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/include/linux/page_counter.h	2025-09-25 06:29:04.530300192 +0000
+@@ -13,6 +13,9 @@
+ 	 * v2. The memcg->memory.usage is a hot member of struct mem_cgroup.
+ 	 */
+ 	atomic_long_t usage;
++#ifdef CONFIG_CGTIER
++	atomic_long_t usage_per_tier[4];
++#endif
+ 	unsigned long failcnt; /* v1-only field */
+ 
+ 	CACHELINE_PADDING(_pad1_);
+@@ -39,6 +42,9 @@
+ 	unsigned long min;
+ 	unsigned long low;
+ 	unsigned long high;
++#ifdef CONFIG_CGTIER
++        unsigned long high_per_tier[4];
++#endif
+ 	unsigned long max;
+ 	struct page_counter *parent;
+ } ____cacheline_internodealigned_in_smp;
+@@ -57,6 +63,9 @@
+ 				     bool protection_support)
+ {
+ 	counter->usage = (atomic_long_t)ATOMIC_LONG_INIT(0);
++#ifdef CONFIG_CGTIER
++	for (long i = 0; i < 4; i++) counter->usage_per_tier[i] = (atomic_long_t)ATOMIC_LONG_INIT(0);
++#endif
+ 	counter->max = PAGE_COUNTER_MAX;
+ 	counter->parent = parent;
+ 	counter->protection_support = protection_support;
+@@ -67,13 +76,34 @@
+ {
+ 	return atomic_long_read(&counter->usage);
+ }
++#ifdef CONFIG_CGTIER
++static inline unsigned long page_counter_read_per_tier(struct page_counter *counter, long tier)
++{
++	return atomic_long_read(&counter->usage_per_tier[tier]);
++}
++#endif
+ 
+-void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages);
+-void page_counter_charge(struct page_counter *counter, unsigned long nr_pages);
++void page_counter_cancel(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif	
++			unsigned long nr_pages);
++void page_counter_charge(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages);
+ bool page_counter_try_charge(struct page_counter *counter,
+-			     unsigned long nr_pages,
+-			     struct page_counter **fail);
+-void page_counter_uncharge(struct page_counter *counter, unsigned long nr_pages);
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages,
++			struct page_counter **fail);
++void page_counter_uncharge(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages);
+ void page_counter_set_min(struct page_counter *counter, unsigned long nr_pages);
+ void page_counter_set_low(struct page_counter *counter, unsigned long nr_pages);
+ 
+@@ -109,4 +139,13 @@
+ 						     bool recursive_protection) {}
+ #endif
+ 
++#ifdef CONFIG_CGTIER
++void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_tier,
++                            unsigned long nr_pages);
++static inline void page_counter_set_high_per_tier(struct page_counter *counter, unsigned long nr_pages, long tier)
++{
++	WRITE_ONCE(counter->high_per_tier[tier], nr_pages);
++}
++#endif
++
+ #endif /* _LINUX_PAGE_COUNTER_H */
+diff -Naur linux-6.15.6/include/linux/resume_user_mode.h linux-6.15.6-CGTIER/include/linux/resume_user_mode.h
+--- linux-6.15.6/include/linux/resume_user_mode.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/include/linux/resume_user_mode.h	2025-09-25 06:29:04.553734032 +0000
+@@ -56,7 +56,11 @@
+ 	}
+ #endif
+ 
+-	mem_cgroup_handle_over_high(GFP_KERNEL);
++	mem_cgroup_handle_over_high(GFP_KERNEL
++#ifdef CONFIG_CGTIER
++			, -1
++#endif
++			);
+ 	blkcg_maybe_throttle_current();
+ 
+ 	rseq_handle_notify_resume(NULL, regs);
+diff -Naur linux-6.15.6/include/linux/sched.h linux-6.15.6-CGTIER/include/linux/sched.h
+--- linux-6.15.6/include/linux/sched.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/include/linux/sched.h	2025-09-25 06:29:04.556301013 +0000
+@@ -1543,6 +1543,9 @@
+ #ifdef CONFIG_MEMCG
+ 	/* Number of pages to reclaim on returning to userland: */
+ 	unsigned int			memcg_nr_pages_over_high;
++#ifdef CONFIG_CGTIER
++	unsigned int			memcg_nr_pages_over_high_per_tier[4];
++#endif
+ 
+ 	/* Used by memcontrol for targeted memcg charge: */
+ 	struct mem_cgroup		*active_memcg;
+diff -Naur linux-6.15.6/init/Kconfig linux-6.15.6-CGTIER/init/Kconfig
+--- linux-6.15.6/init/Kconfig	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/init/Kconfig	2025-09-25 06:29:04.692679896 +0000
+@@ -1001,6 +1001,9 @@
+ 	help
+ 	  Provides control over the memory footprint of tasks in a cgroup.
+ 
++config CGTIER
++	bool "CGTIER test"
++
+ config MEMCG_V1
+ 	bool "Legacy cgroup v1 memory controller"
+ 	depends on MEMCG
+diff -Naur linux-6.15.6/kernel/cgroup/dmem.c linux-6.15.6-CGTIER/kernel/cgroup/dmem.c
+--- linux-6.15.6/kernel/cgroup/dmem.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/kernel/cgroup/dmem.c	2025-09-25 06:29:04.708305811 +0000
+@@ -573,7 +573,11 @@
+ 	if (!pool)
+ 		return;
+ 
+-	page_counter_uncharge(&pool->cnt, size);
++	page_counter_uncharge(&pool->cnt,
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
++			size);
+ 	css_put(&pool->cs->css);
+ }
+ EXPORT_SYMBOL_GPL(dmem_cgroup_uncharge);
+@@ -622,7 +626,11 @@
+ 		goto err;
+ 	}
+ 
+-	if (!page_counter_try_charge(&pool->cnt, size, &fail)) {
++	if (!page_counter_try_charge(&pool->cnt,
++#ifdef CONFIG_CGTIER
++				-1,
++#endif
++				size, &fail)) {
+ 		if (ret_limit_pool) {
+ 			*ret_limit_pool = container_of(fail, struct dmem_cgroup_pool_state, cnt);
+ 			css_get(&(*ret_limit_pool)->cs->css);
+diff -Naur linux-6.15.6/mm/hugetlb_cgroup.c linux-6.15.6-CGTIER/mm/hugetlb_cgroup.c
+--- linux-6.15.6/mm/hugetlb_cgroup.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/hugetlb_cgroup.c	2025-09-25 06:29:04.795308558 +0000
+@@ -22,6 +22,7 @@
+ #include <linux/slab.h>
+ #include <linux/hugetlb.h>
+ #include <linux/hugetlb_cgroup.h>
++#include <linux/memory-tiers.h>
+ 
+ #define MEMFILE_PRIVATE(x, val)	(((x) << 16) | (val))
+ #define MEMFILE_IDX(val)	(((val) >> 16) & 0xffff)
+@@ -212,11 +213,19 @@
+ 	if (!parent) {
+ 		parent = root_h_cgroup;
+ 		/* root has no limit */
+-		page_counter_charge(&parent->hugepage[idx], nr_pages);
++		page_counter_charge(&parent->hugepage[idx],
++#ifdef CONFIG_CGTIER
++				node_to_tier[folio_nid(folio)],
++#endif
++				nr_pages);
+ 	}
+ 	counter = &h_cg->hugepage[idx];
+ 	/* Take the pages off the local counter */
+-	page_counter_cancel(counter, nr_pages);
++	page_counter_cancel(counter,
++#ifdef CONFIG_CGTIER
++			node_to_tier[folio_nid(folio)],
++#endif	
++			nr_pages);
+ 
+ 	set_hugetlb_cgroup(folio, parent);
+ out:
+@@ -279,6 +288,9 @@
+ 
+ 	if (!page_counter_try_charge(
+ 		    __hugetlb_cgroup_counter_from_cgroup(h_cg, idx, rsvd),
++#ifdef CONFIG_CGTIER
++		    -1,
++#endif
+ 		    nr_pages, &counter)) {
+ 		ret = -ENOMEM;
+ 		hugetlb_event(h_cg, idx, HUGETLB_MAX);
+@@ -361,6 +373,9 @@
+ 
+ 	page_counter_uncharge(__hugetlb_cgroup_counter_from_cgroup(h_cg, idx,
+ 								   rsvd),
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
+ 			      nr_pages);
+ 
+ 	if (rsvd)
+@@ -399,6 +414,9 @@
+ 
+ 	page_counter_uncharge(__hugetlb_cgroup_counter_from_cgroup(h_cg, idx,
+ 								   rsvd),
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
+ 			      nr_pages);
+ 
+ 	if (rsvd)
+@@ -425,6 +443,9 @@
+ 		return;
+ 
+ 	page_counter_uncharge(resv->reservation_counter,
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
+ 			      (end - start) * resv->pages_per_hpage);
+ 	css_put(resv->css);
+ }
+@@ -440,6 +461,9 @@
+ 	if (rg->reservation_counter && resv->pages_per_hpage &&
+ 	    !resv->reservation_counter) {
+ 		page_counter_uncharge(rg->reservation_counter,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
+ 				      nr_pages * resv->pages_per_hpage);
+ 		/*
+ 		 * Only do css_put(rg->css) when we delete the entire region
+diff -Naur linux-6.15.6/mm/memcontrol-v1.c linux-6.15.6-CGTIER/mm/memcontrol-v1.c
+--- linux-6.15.6/mm/memcontrol-v1.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/memcontrol-v1.c	2025-09-25 06:29:04.799308684 +0000
+@@ -626,12 +626,24 @@
+ 	folio->memcg_data = 0;
+ 
+ 	if (!mem_cgroup_is_root(memcg))
+-		page_counter_uncharge(&memcg->memory, nr_entries);
++		page_counter_uncharge(&memcg->memory,
++#ifdef CONFIG_CGTIER
++				node_to_tier[folio_nid(folio)],
++#endif
++			       	nr_entries);
+ 
+ 	if (memcg != swap_memcg) {
+ 		if (!mem_cgroup_is_root(swap_memcg))
+-			page_counter_charge(&swap_memcg->memsw, nr_entries);
+-		page_counter_uncharge(&memcg->memsw, nr_entries);
++			page_counter_charge(&swap_memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++				       	nr_entries);
++		page_counter_uncharge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++				nr_entries);
+ 	}
+ 
+ 	/*
+@@ -2166,9 +2178,17 @@
+ {
+ 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys)) {
+ 		if (nr_pages > 0)
+-			page_counter_charge(&memcg->kmem, nr_pages);
++			page_counter_charge(&memcg->kmem,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					nr_pages);
+ 		else
+-			page_counter_uncharge(&memcg->kmem, -nr_pages);
++			page_counter_uncharge(&memcg->kmem,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					-nr_pages);
+ 	}
+ }
+ 
+@@ -2177,7 +2197,11 @@
+ {
+ 	struct page_counter *fail;
+ 
+-	if (page_counter_try_charge(&memcg->tcpmem, nr_pages, &fail)) {
++	if (page_counter_try_charge(&memcg->tcpmem,
++#ifdef CONFIG_CGTIER
++				-1,
++#endif
++				nr_pages, &fail)) {
+ 		memcg->tcpmem_pressure = 0;
+ 		return true;
+ 	}
+diff -Naur linux-6.15.6/mm/memcontrol-v1.h linux-6.15.6-CGTIER/mm/memcontrol-v1.h
+--- linux-6.15.6/mm/memcontrol-v1.h	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/memcontrol-v1.h	2025-09-25 06:29:04.799308684 +0000
+@@ -86,7 +86,11 @@
+ 			 gfp_t gfp_mask);
+ static inline void memcg1_uncharge_skmem(struct mem_cgroup *memcg, unsigned int nr_pages)
+ {
+-	page_counter_uncharge(&memcg->tcpmem, nr_pages);
++	page_counter_uncharge(&memcg->tcpmem,
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
++			nr_pages);
+ }
+ 
+ extern struct cftype memsw_files[];
+diff -Naur linux-6.15.6/mm/memcontrol.c linux-6.15.6-CGTIER/mm/memcontrol.c
+--- linux-6.15.6/mm/memcontrol.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/memcontrol.c	2025-09-25 06:29:04.800308716 +0000
+@@ -68,6 +68,7 @@
+ #include <net/ip.h>
+ #include "slab.h"
+ #include "memcontrol-v1.h"
++#include <linux/memory-tiers.h>
+ 
+ #include <linux/uaccess.h>
+ 
+@@ -1832,9 +1833,17 @@
+ 		return;
+ 
+ 	if (stock_pages) {
+-		page_counter_uncharge(&old->memory, stock_pages);
++		page_counter_uncharge(&old->memory,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++				stock_pages);
+ 		if (do_memsw_account())
+-			page_counter_uncharge(&old->memsw, stock_pages);
++			page_counter_uncharge(&old->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					stock_pages);
+ 
+ 		WRITE_ONCE(stock->nr_pages, 0);
+ 	}
+@@ -1887,7 +1896,8 @@
+ 		drain_stock(stock);
+ }
+ 
+-static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
++static void refill_stock(struct mem_cgroup *memcg,
++			unsigned int nr_pages)
+ {
+ 	unsigned long flags;
+ 
+@@ -1898,9 +1908,17 @@
+ 		 */
+ 		if (mem_cgroup_is_root(memcg))
+ 			return;
+-		page_counter_uncharge(&memcg->memory, nr_pages);
++		page_counter_uncharge(&memcg->memory,
++#ifdef CONFIG_CGTIER
++				-1,
++#endif
++				nr_pages);
+ 		if (do_memsw_account())
+-			page_counter_uncharge(&memcg->memsw, nr_pages);
++			page_counter_uncharge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					nr_pages);
+ 		return;
+ 	}
+ 	__refill_stock(memcg, nr_pages);
+@@ -1972,6 +1990,9 @@
+ }
+ 
+ static unsigned long reclaim_high(struct mem_cgroup *memcg,
++#ifdef CONFIG_CGTIER
++				  long tier,
++#endif
+ 				  unsigned int nr_pages,
+ 				  gfp_t gfp_mask)
+ {
+@@ -1980,10 +2001,30 @@
+ 	do {
+ 		unsigned long pflags;
+ 
++#ifdef CONFIG_CGTIER
++		if ((tier + 1) && (page_counter_read_per_tier(&memcg->memory, tier) <= 
++					READ_ONCE(memcg->memory.high_per_tier[tier])))
++			continue;
++		if (!(tier + 1)) {
++			for (long i = 0; i < 4; i++) {
++				if (page_counter_read_per_tier(&memcg->memory, i) >
++                                        READ_ONCE(memcg->memory.high_per_tier[i])) {
++					tier = i;
++					goto reclaim_path;
++				}
++			}
++		}
++		if (!(tier+1) && (page_counter_read(&memcg->memory) <=
++		    READ_ONCE(memcg->memory.high)))
++			continue;
++#else
+ 		if (page_counter_read(&memcg->memory) <=
+ 		    READ_ONCE(memcg->memory.high))
+ 			continue;
+-
++#endif
++#ifdef CONFIG_CGTIER
++reclaim_path:
++#endif
+ 		memcg_memory_event(memcg, MEMCG_HIGH);
+ 
+ 		psi_memstall_enter(&pflags);
+@@ -2003,7 +2044,11 @@
+ 	struct mem_cgroup *memcg;
+ 
+ 	memcg = container_of(work, struct mem_cgroup, high_work);
+-	reclaim_high(memcg, MEMCG_CHARGE_BATCH, GFP_KERNEL);
++	reclaim_high(memcg,
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
++			MEMCG_CHARGE_BATCH, GFP_KERNEL);
+ }
+ 
+ /*
+@@ -2077,13 +2122,26 @@
+ 	return div64_u64(overage, high);
+ }
+ 
+-static u64 mem_find_max_overage(struct mem_cgroup *memcg)
++static u64 mem_find_max_overage(struct mem_cgroup *memcg
++#ifdef CONFIG_CGTIER
++				,long tier
++#endif
++		)
+ {
+ 	u64 overage, max_overage = 0;
+ 
+ 	do {
++#ifdef CONFIG_CGTIER
++		if (tier + 1)
++			overage = calculate_overage(page_counter_read_per_tier(&memcg->memory, tier),
++					READ_ONCE(memcg->memory.high_per_tier[tier]));
++		else 
++			overage = calculate_overage(page_counter_read(&memcg->memory),
++					    READ_ONCE(memcg->memory.high));
++#else
+ 		overage = calculate_overage(page_counter_read(&memcg->memory),
+ 					    READ_ONCE(memcg->memory.high));
++#endif
+ 		max_overage = max(overage, max_overage);
+ 	} while ((memcg = parent_mem_cgroup(memcg)) &&
+ 		 !mem_cgroup_is_root(memcg));
+@@ -2148,12 +2206,21 @@
+  * try_charge() (context permitting), as well as from the userland
+  * return path where reclaim is always able to block.
+  */
+-void mem_cgroup_handle_over_high(gfp_t gfp_mask)
++void mem_cgroup_handle_over_high(gfp_t gfp_mask
++#ifdef CONFIG_CGTIER
++				, long tier
++#endif
++		)
+ {
+ 	unsigned long penalty_jiffies;
+ 	unsigned long pflags;
+ 	unsigned long nr_reclaimed;
+ 	unsigned int nr_pages = current->memcg_nr_pages_over_high;
++#ifdef CONFIG_CGTIER
++	if (tier + 1) {
++		nr_pages = current->memcg_nr_pages_over_high_per_tier[tier];
++	}
++#endif
+ 	int nr_retries = MAX_RECLAIM_RETRIES;
+ 	struct mem_cgroup *memcg;
+ 	bool in_retry = false;
+@@ -2162,7 +2229,12 @@
+ 		return;
+ 
+ 	memcg = get_mem_cgroup_from_mm(current->mm);
++#ifdef CONFIG_CGTIER
++	if (tier + 1) current->memcg_nr_pages_over_high_per_tier[tier] = 0;
++	else current->memcg_nr_pages_over_high = 0;
++#else
+ 	current->memcg_nr_pages_over_high = 0;
++#endif
+ 
+ retry_reclaim:
+ 	/*
+@@ -2186,6 +2258,9 @@
+ 	 * allocator run every time an allocation is made.
+ 	 */
+ 	nr_reclaimed = reclaim_high(memcg,
++#ifdef CONFIG_CGTIER
++				    tier,
++#endif
+ 				    in_retry ? SWAP_CLUSTER_MAX : nr_pages,
+ 				    gfp_mask);
+ 
+@@ -2194,7 +2269,11 @@
+ 	 * allocators proactively to slow down excessive growth.
+ 	 */
+ 	penalty_jiffies = calculate_high_delay(memcg, nr_pages,
+-					       mem_find_max_overage(memcg));
++					       mem_find_max_overage(memcg
++#ifdef CONFIG_CGTIER
++						, tier
++#endif
++						       ));
+ 
+ 	penalty_jiffies += calculate_high_delay(memcg, nr_pages,
+ 						swap_find_max_overage(memcg));
+@@ -2242,6 +2321,9 @@
+ }
+ 
+ static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
++#ifdef CONFIG_CGTIER
++			    long tier,
++#endif
+ 			    unsigned int nr_pages)
+ {
+ 	unsigned int batch = max(MEMCG_CHARGE_BATCH, nr_pages);
+@@ -2264,11 +2346,23 @@
+ 		batch = nr_pages;
+ 
+ 	if (!do_memsw_account() ||
+-	    page_counter_try_charge(&memcg->memsw, batch, &counter)) {
+-		if (page_counter_try_charge(&memcg->memory, batch, &counter))
++	    page_counter_try_charge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++		    -1,
++#endif
++		    batch, &counter)) {
++		if (page_counter_try_charge(&memcg->memory,
++#ifdef CONFIG_CGTIER
++					tier,
++#endif
++					batch, &counter))
+ 			goto done_restock;
+ 		if (do_memsw_account())
+-			page_counter_uncharge(&memcg->memsw, batch);
++			page_counter_uncharge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					batch);
+ 		mem_over_limit = mem_cgroup_from_counter(counter, memory);
+ 	} else {
+ 		mem_over_limit = mem_cgroup_from_counter(counter, memsw);
+@@ -2369,9 +2463,17 @@
+ 	 * being freed very soon.  Allow memory usage go over the limit
+ 	 * temporarily by force charging it.
+ 	 */
+-	page_counter_charge(&memcg->memory, nr_pages);
++	page_counter_charge(&memcg->memory,
++#ifdef CONFIG_CGTIER
++			tier,
++#endif
++		       nr_pages);
+ 	if (do_memsw_account())
+-		page_counter_charge(&memcg->memsw, nr_pages);
++		page_counter_charge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++				-1,
++#endif
++				nr_pages);
+ 
+ 	return 0;
+ 
+@@ -2391,8 +2493,17 @@
+ 	do {
+ 		bool mem_high, swap_high;
+ 
++#ifdef CONFIG_CGTIER
++		if (tier + 1) {
++			mem_high = page_counter_read_per_tier(&memcg->memory, tier) >
++			READ_ONCE(memcg->memory.high_per_tier[tier]);
++		}
++		else mem_high = page_counter_read(&memcg->memory) >
++			READ_ONCE(memcg->memory.high);
++#else
+ 		mem_high = page_counter_read(&memcg->memory) >
+ 			READ_ONCE(memcg->memory.high);
++#endif
+ 		swap_high = page_counter_read(&memcg->swap) >
+ 			READ_ONCE(memcg->swap.high);
+ 
+@@ -2415,7 +2526,12 @@
+ 			 * and distribute reclaim work and delay penalties
+ 			 * based on how much each task is actually allocating.
+ 			 */
++#ifdef CONFIG_CGTIER
++			if (tier + 1) current->memcg_nr_pages_over_high_per_tier[tier] += batch;
++			else current->memcg_nr_pages_over_high += batch;
++#else
+ 			current->memcg_nr_pages_over_high += batch;
++#endif
+ 			set_notify_resume(current);
+ 			break;
+ 		}
+@@ -2428,20 +2544,37 @@
+ 	 * kernel. If this is successful, the return path will see it
+ 	 * when it rechecks the overage and simply bail out.
+ 	 */
+-	if (current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH &&
+-	    !(current->flags & PF_MEMALLOC) &&
+-	    gfpflags_allow_blocking(gfp_mask))
+-		mem_cgroup_handle_over_high(gfp_mask);
++
++	if (
++#ifdef CONFIG_CGTIER
++	(((tier + 1) && (current->memcg_nr_pages_over_high_per_tier[tier] > MEMCG_CHARGE_BATCH))
++	|| (!(tier + 1) && (current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH)))
++#else
++	current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH 
++#endif
++	&& !(current->flags & PF_MEMALLOC) && gfpflags_allow_blocking(gfp_mask))
++		mem_cgroup_handle_over_high(gfp_mask
++#ifdef CONFIG_CGTIER
++				, tier
++#endif
++				);
+ 	return 0;
+ }
+ 
+ static inline int try_charge(struct mem_cgroup *memcg, gfp_t gfp_mask,
++#ifdef CONFIG_CGTIER
++			     long tier,
++#endif
+ 			     unsigned int nr_pages)
+ {
+ 	if (mem_cgroup_is_root(memcg))
+ 		return 0;
+ 
+-	return try_charge_memcg(memcg, gfp_mask, nr_pages);
++	return try_charge_memcg(memcg, gfp_mask,
++#ifdef CONFIG_CGTIER
++			tier,
++#endif
++			nr_pages);
+ }
+ 
+ static void commit_charge(struct folio *folio, struct mem_cgroup *memcg)
+@@ -2690,7 +2823,11 @@
+ 
+ 	memcg = get_mem_cgroup_from_objcg(objcg);
+ 
+-	ret = try_charge_memcg(memcg, gfp, nr_pages);
++	ret = try_charge_memcg(memcg, gfp,
++#ifdef CONFIG_CGTIER
++			-1,
++#endif
++			nr_pages);
+ 	if (ret)
+ 		goto out;
+ 
+@@ -3674,6 +3811,10 @@
+ 		return ERR_CAST(memcg);
+ 
+ 	page_counter_set_high(&memcg->memory, PAGE_COUNTER_MAX);
++#ifdef CONFIG_CGTIER
++	for (long i = 0; i < 4; i++)
++		page_counter_set_high_per_tier(&memcg->memory, PAGE_COUNTER_MAX, i);
++#endif
+ 	memcg1_soft_limit_reset(memcg);
+ #ifdef CONFIG_ZSWAP
+ 	memcg->zswap_max = PAGE_COUNTER_MAX;
+@@ -3837,6 +3978,10 @@
+ 	page_counter_set_min(&memcg->memory, 0);
+ 	page_counter_set_low(&memcg->memory, 0);
+ 	page_counter_set_high(&memcg->memory, PAGE_COUNTER_MAX);
++#ifdef CONFIG_CGTIER
++	for (long i = 0; i < 4; i++) 
++		page_counter_set_high_per_tier(&memcg->memory, PAGE_COUNTER_MAX, i); 
++#endif
+ 	memcg1_soft_limit_reset(memcg);
+ 	page_counter_set_high(&memcg->swap, PAGE_COUNTER_MAX);
+ 	memcg_wb_domain_size_changed(memcg);
+@@ -4467,12 +4612,112 @@
+ 	return nbytes;
+ }
+ 
++#ifdef CONFIG_CGTIER
++static u64 tiered_memory_current_read(struct cgroup_subsys_state *css,
++			       struct cftype *cft)
++{
++	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
++	long tier_id = (long)cft->private;
++	if (tier_id < 0 || tier_id >= 4) return 0;
++
++	return (u64)page_counter_read_per_tier(&memcg->memory, tier_id) * PAGE_SIZE;
++}
++
++static int tiered_memory_high_show(struct seq_file *m, void *v)
++{
++	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
++	struct cftype *cft = seq_cft(m);
++	long tier_id = (long)cft->private;
++
++
++	if (tier_id < 0 || tier_id >= 4) {
++		seq_puts(m, "0\n");
++		return 0;
++	}
++
++	return seq_puts_memcg_tunable(m,
++		READ_ONCE(memcg->memory.high_per_tier[tier_id]));
++}
++
++static ssize_t tiered_memory_high_write(struct kernfs_open_file *of,
++					char *buf, size_t nbytes, loff_t off)
++{
++	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
++	unsigned int nr_retries = MAX_RECLAIM_RETRIES;
++	bool drained = false;
++	unsigned long high;
++	long tier_id = (long)of_cft(of)->private;
++	int err;
++
++	if (tier_id < 0 || tier_id >= 4)
++		return -EINVAL;
++
++	buf = strstrip(buf);
++	err = page_counter_memparse(buf, "max", &high);
++	if (err)
++		return err;
++	page_counter_set_high_per_tier(&memcg->memory, high, tier_id);
++
++	for (;;) {
++		unsigned long nr_pages = page_counter_read_per_tier(&memcg->memory, tier_id);
++		unsigned long reclaimed;
++
++		if (nr_pages <= high)
++			break;
++
++		if (signal_pending(current))
++			break;
++
++		if (!drained) {
++			drain_all_stock(memcg);
++			drained = true;
++			continue;
++		}
++
++		reclaimed = try_to_free_mem_cgroup_pages(memcg,
++					nr_pages - high,
++					GFP_KERNEL,
++					MEMCG_RECLAIM_MAY_SWAP,
++					NULL);
++
++		if (!reclaimed && !nr_retries--)
++			break;
++	}
++	memcg_wb_domain_size_changed(memcg);
++	return nbytes;
++}
++
++#define TIERED_MEMORY_CURRENT_CFTYPE(_tier)   \
++	{                                       \
++        .name = "tiered_memory_" #_tier "_current", \
++	.flags = CFTYPE_NOT_ON_ROOT,		\
++        .read_u64 = tiered_memory_current_read, \
++        .private = _tier,           \
++	}
++
++#define TIERED_MEMORY_HIGH_CFTYPE(_tier)				 \
++	{								 \
++		.name = "tiered_memory_" #_tier "_high",		 \
++		.flags = CFTYPE_NOT_ON_ROOT,				 \
++		.seq_show = tiered_memory_high_show,			 \
++		.write = tiered_memory_high_write,			 \
++		.private = _tier,				 \
++	}
++
++#endif
++
+ static struct cftype memory_files[] = {
+ 	{
+ 		.name = "current",
+ 		.flags = CFTYPE_NOT_ON_ROOT,
+ 		.read_u64 = memory_current_read,
+ 	},
++#ifdef CONFIG_CGTIER
++	TIERED_MEMORY_CURRENT_CFTYPE(0),
++	TIERED_MEMORY_CURRENT_CFTYPE(1),
++	TIERED_MEMORY_CURRENT_CFTYPE(2),
++	TIERED_MEMORY_CURRENT_CFTYPE(3),
++#endif
+ 	{
+ 		.name = "peak",
+ 		.flags = CFTYPE_NOT_ON_ROOT,
+@@ -4499,6 +4744,12 @@
+ 		.seq_show = memory_high_show,
+ 		.write = memory_high_write,
+ 	},
++#ifdef CONFIG_CGTIER
++	TIERED_MEMORY_HIGH_CFTYPE(0),
++	TIERED_MEMORY_HIGH_CFTYPE(1),
++	TIERED_MEMORY_HIGH_CFTYPE(2),
++	TIERED_MEMORY_HIGH_CFTYPE(3),
++#endif
+ 	{
+ 		.name = "max",
+ 		.flags = CFTYPE_NOT_ON_ROOT,
+@@ -4587,7 +4838,11 @@
+ {
+ 	int ret;
+ 
+-	ret = try_charge(memcg, gfp, folio_nr_pages(folio));
++	ret = try_charge(memcg, gfp,
++#ifdef CONFIG_CGTIER
++			node_to_tier[folio_nid(folio)],
++#endif
++			folio_nr_pages(folio));
+ 	if (ret)
+ 		goto out;
+ 
+@@ -4695,9 +4950,17 @@
+ static void uncharge_batch(const struct uncharge_gather *ug)
+ {
+ 	if (ug->nr_memory) {
+-		page_counter_uncharge(&ug->memcg->memory, ug->nr_memory);
++		page_counter_uncharge(&ug->memcg->memory,
++#ifdef CONFIG_CGTIER
++				node_to_tier[ug->nid],
++#endif
++				ug->nr_memory);
+ 		if (do_memsw_account())
+-			page_counter_uncharge(&ug->memcg->memsw, ug->nr_memory);
++			page_counter_uncharge(&ug->memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					ug->nr_memory);
+ 		if (ug->nr_kmem) {
+ 			mod_memcg_state(ug->memcg, MEMCG_KMEM, -ug->nr_kmem);
+ 			memcg1_account_kmem(ug->memcg, -ug->nr_kmem);
+@@ -4830,9 +5093,17 @@
+ 
+ 	/* Force-charge the new page. The old one will be freed soon */
+ 	if (!mem_cgroup_is_root(memcg)) {
+-		page_counter_charge(&memcg->memory, nr_pages);
++		page_counter_charge(&memcg->memory,
++#ifdef CONFIG_CGTIER
++				node_to_tier[folio_nid(new)],
++#endif
++				nr_pages);
+ 		if (do_memsw_account())
+-			page_counter_charge(&memcg->memsw, nr_pages);
++			page_counter_charge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++					nr_pages);
+ 	}
+ 
+ 	css_get(&memcg->css);
+@@ -4929,7 +5200,11 @@
+ 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys))
+ 		return memcg1_charge_skmem(memcg, nr_pages, gfp_mask);
+ 
+-	if (try_charge_memcg(memcg, gfp_mask, nr_pages) == 0) {
++	if (try_charge_memcg(memcg, gfp_mask,
++#ifdef CONFIG_CGTIER
++					-1,
++#endif
++				nr_pages) == 0) {
+ 		mod_memcg_state(memcg, MEMCG_SOCK, nr_pages);
+ 		return true;
+ 	}
+@@ -4954,6 +5229,29 @@
+ 	refill_stock(memcg, nr_pages);
+ }
+ 
++#ifdef CONFIG_CGTIER
++void memcg_move_folio_tier(struct folio *folio, int src_nid, int dst_nid)
++{
++        struct mem_cgroup *memcg;
++        int src_tier, dst_tier;
++
++        if (mem_cgroup_disabled())
++                return;
++
++        src_tier = node_to_tier[src_nid];
++        dst_tier = node_to_tier[dst_nid];
++        if (src_tier == dst_tier)
++                return;
++
++        memcg = folio_memcg(folio);
++        if (!memcg)
++                return;
++
++        page_counter_move_tier(&memcg->memory, src_tier, dst_tier,
++                               folio_nr_pages(folio));
++}
++#endif
++
+ static int __init cgroup_memory(char *s)
+ {
+ 	char *token;
+@@ -4999,6 +5297,9 @@
+ 		INIT_WORK(&per_cpu_ptr(&memcg_stock, cpu)->work,
+ 			  drain_local_stock);
+ 
++	node_to_tier = kcalloc(nr_node_ids, sizeof(int), GFP_KERNEL);
++	for (int i = 0; i < nr_node_ids; i++) node_to_tier[i] = -1;
++
+ 	return 0;
+ }
+ subsys_initcall(mem_cgroup_init);
+@@ -5036,7 +5337,11 @@
+ 	memcg = mem_cgroup_id_get_online(memcg);
+ 
+ 	if (!mem_cgroup_is_root(memcg) &&
+-	    !page_counter_try_charge(&memcg->swap, nr_pages, &counter)) {
++	    !page_counter_try_charge(&memcg->swap,
++#ifdef CONFIG_CGTIER
++		    -1,
++#endif
++		    nr_pages, &counter)) {
+ 		memcg_memory_event(memcg, MEMCG_SWAP_MAX);
+ 		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
+ 		mem_cgroup_id_put(memcg);
+@@ -5069,9 +5374,17 @@
+ 	if (memcg) {
+ 		if (!mem_cgroup_is_root(memcg)) {
+ 			if (do_memsw_account())
+-				page_counter_uncharge(&memcg->memsw, nr_pages);
++				page_counter_uncharge(&memcg->memsw,
++#ifdef CONFIG_CGTIER
++						-1,
++#endif
++						nr_pages);
+ 			else
+-				page_counter_uncharge(&memcg->swap, nr_pages);
++				page_counter_uncharge(&memcg->swap,
++#ifdef CONFIG_CGTIER
++						-1,
++#endif
++						nr_pages);
+ 		}
+ 		mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
+ 		mem_cgroup_id_put_many(memcg, nr_pages);
+diff -Naur linux-6.15.6/mm/memory-tiers.c linux-6.15.6-CGTIER/mm/memory-tiers.c
+--- linux-6.15.6/mm/memory-tiers.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/memory-tiers.c	2025-09-25 06:29:04.800308716 +0000
+@@ -51,6 +51,8 @@
+ 	.dev_name = "memory_tier",
+ };
+ 
++int* node_to_tier;
++
+ #ifdef CONFIG_NUMA_BALANCING
+ /**
+  * folio_use_access_time - check if a folio reuses cpupid for page access time
+@@ -273,6 +275,21 @@
+ 				     lockdep_is_held(&memory_tier_lock));
+ }
+ 
++static int get_memtier_index(int node)
++{
++    struct memory_tier *target_memtier = __node_get_memory_tier(node);
++    struct memory_tier *current_memtier;
++    int index = 0;
++    list_for_each_entry(current_memtier, &memory_tiers, list) {
++        if (current_memtier == target_memtier) {
++            return index;
++        }
++        index++;
++    }
++
++    return -1;
++}
++
+ #ifdef CONFIG_MIGRATION
+ bool node_is_toptier(int node)
+ {
+@@ -721,6 +738,16 @@
+ 	establish_demotion_targets();
+ 	put_online_mems();
+ 
++	for (int i = 0; i < nr_node_ids; i++) {
++		if (node_state(i, N_ONLINE))
++			node_to_tier[i] = get_memtier_index(i);
++		else
++			node_to_tier[i] = -1;
++	}
++
++	for (int i = 0; i < nr_node_ids; i++) 
++		printk("[ALERT] Node [%d] : Tier [%d]\n", i, node_to_tier[i]);	
++
+ 	return 0;
+ }
+ late_initcall(memory_tier_late_init);
+diff -Naur linux-6.15.6/mm/migrate.c linux-6.15.6-CGTIER/mm/migrate.c
+--- linux-6.15.6/mm/migrate.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/migrate.c	2025-09-25 06:29:04.802308779 +0000
+@@ -43,6 +43,7 @@
+ #include <linux/memory.h>
+ #include <linux/sched/sysctl.h>
+ #include <linux/memory-tiers.h>
++#include <linux/memcontrol.h>
+ #include <linux/pagewalk.h>
+ 
+ #include <asm/tlbflush.h>
+@@ -1078,6 +1079,9 @@
+ 	 * src is freed; but stats require that PageAnon be left as PageAnon.
+ 	 */
+ 	if (rc == MIGRATEPAGE_SUCCESS) {
++#ifdef CONFIG_CGTIER
++		memcg_move_folio_tier(dst, folio_nid(src), folio_nid(dst));
++#endif
+ 		if (__folio_test_movable(src)) {
+ 			VM_BUG_ON_FOLIO(!folio_test_isolated(src), src);
+ 
+diff -Naur linux-6.15.6/mm/page_counter.c linux-6.15.6-CGTIER/mm/page_counter.c
+--- linux-6.15.6/mm/page_counter.c	2025-07-10 14:08:55.000000000 +0000
++++ linux-6.15.6-CGTIER/mm/page_counter.c	2025-09-25 06:29:04.805308874 +0000
+@@ -51,10 +51,27 @@
+  * @counter: counter
+  * @nr_pages: number of pages to cancel
+  */
+-void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
++void page_counter_cancel(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages)
+ {
+ 	long new;
+ 
++
++#ifdef CONFIG_CGTIER
++	if (tier + 1) {
++		new = atomic_long_sub_return(nr_pages, &counter->usage_per_tier[tier]);
++		/* More uncharges than charges? */
++		if (WARN_ONCE(new < 0, "page_counter underflow: %ld nr_pages=%lu\n",
++			      new, nr_pages)) {
++			new = 0;
++			atomic_long_set(&counter->usage_per_tier[tier], new);
++		}
++	}
++#endif
++
+ 	new = atomic_long_sub_return(nr_pages, &counter->usage);
+ 	/* More uncharges than charges? */
+ 	if (WARN_ONCE(new < 0, "page_counter underflow: %ld nr_pages=%lu\n",
+@@ -73,13 +90,20 @@
+  *
+  * NOTE: This does not consider any configured counter limits.
+  */
+-void page_counter_charge(struct page_counter *counter, unsigned long nr_pages)
++void page_counter_charge(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages)
+ {
+ 	struct page_counter *c;
+ 	bool protection = track_protection(counter);
+ 
+ 	for (c = counter; c; c = c->parent) {
+ 		long new;
++#ifdef CONFIG_CGTIER
++		if (tier + 1) atomic_long_add(nr_pages, &c->usage_per_tier[tier]);
++#endif
+ 
+ 		new = atomic_long_add_return(nr_pages, &c->usage);
+ 		if (protection)
+@@ -116,8 +140,11 @@
+  * of its ancestors has hit its configured limit.
+  */
+ bool page_counter_try_charge(struct page_counter *counter,
+-			     unsigned long nr_pages,
+-			     struct page_counter **fail)
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages,
++			struct page_counter **fail)
+ {
+ 	struct page_counter *c;
+ 	bool protection = track_protection(counter);
+@@ -139,8 +166,14 @@
+ 		 * we either see the new limit or the setter sees the
+ 		 * counter has changed and retries.
+ 		 */
++#ifdef CONFIG_CGTIER
++		if (tier + 1) atomic_long_add(nr_pages, &c->usage_per_tier[tier]);
++#endif
+ 		new = atomic_long_add_return(nr_pages, &c->usage);
+ 		if (new > c->max) {
++#ifdef CONFIG_CGTIER
++			if (tier + 1) atomic_long_sub(nr_pages, &c->usage_per_tier[tier]);
++#endif
+ 			atomic_long_sub(nr_pages, &c->usage);
+ 			/*
+ 			 * This is racy, but we can live with some
+@@ -166,7 +199,11 @@
+ 
+ failed:
+ 	for (c = counter; c != *fail; c = c->parent)
+-		page_counter_cancel(c, nr_pages);
++		page_counter_cancel(c,
++#ifdef CONFIG_CGTIER
++				tier,
++#endif
++				nr_pages);
+ 
+ 	return false;
+ }
+@@ -176,12 +213,20 @@
+  * @counter: counter
+  * @nr_pages: number of pages to uncharge
+  */
+-void page_counter_uncharge(struct page_counter *counter, unsigned long nr_pages)
++void page_counter_uncharge(struct page_counter *counter,
++#ifdef CONFIG_CGTIER
++			long tier,
++#endif
++			unsigned long nr_pages)
+ {
+ 	struct page_counter *c;
+ 
+ 	for (c = counter; c; c = c->parent)
+-		page_counter_cancel(c, nr_pages);
++		page_counter_cancel(c,
++#ifdef CONFIG_CGTIER
++				tier,
++#endif
++				nr_pages);
+ }
+ 
+ /**
+@@ -462,4 +507,20 @@
+ 			atomic_long_read(&parent->children_low_usage),
+ 			recursive_protection));
+ }
++
++#ifdef CONFIG_CGTIER
++void page_counter_move_tier(struct page_counter *counter, int src_tier, int dst_tier,
++                            unsigned long nr_pages)
++{
++        struct page_counter *c;
++
++        if (src_tier == dst_tier)
++                return;
++
++        for (c = counter; c; c = c->parent) {
++                atomic_long_sub(nr_pages, &c->usage_per_tier[src_tier]);
++                atomic_long_add(nr_pages, &c->usage_per_tier[dst_tier]);
++        }
++}
++#endif
+ #endif /* CONFIG_MEMCG || CONFIG_CGROUP_DMEM */
