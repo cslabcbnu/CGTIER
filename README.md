@@ -1,4 +1,4 @@
-# CGTIER: Implementation and Evaluation of Cgroup Function for Active Memory Constraints in Tiered Memory Environment
+# CGTIER: Implementation and Evaluation of Cgroups Function for Active Memory Constraints in Tiered Memory Environment
 
 [![Kernel Version](https://img.shields.io/badge/Linux%20Kernel-6.15.6-blue.svg)](https://www.kernel.org/)
 
@@ -18,7 +18,7 @@ To address these issues, we propose **CGTIER**. By implementing the following co
 ### Key Features
 
 * **🎯 Per-tier Page Counters:** Implements separate page counters for each memory tier, allowing for precise tracking of how much memory each cgroup is using on a per-tier basis.
-* **🔧 New Control Interface (`tiered_N_high`):** Introduces a new control file, `memory.tiered_N.high` (where N is the tier ID), to the cgroupfs. This allows users to directly set a soft memory limit for each tier.
+* **🔧 New Control Interface (`tiered_memory_N_high`):** Introduces a new control file, `memory.tiered_N.high` (where N is the tier ID), to the cgroupfs. This allows users to directly set a soft memory limit for each tier.
 * **🧠 Automatic Demotion:** When a cgroup's memory usage on a specific tier reaches the configured `tiered_N_high` limit, excess memory pages are automatically demoted to the next lower tier. This ensures service continuity and prevents performance degradation.
 
 ## 🚀 Performance Evaluation
