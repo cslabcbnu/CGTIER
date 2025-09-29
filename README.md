@@ -1,4 +1,4 @@
-# CGTIER: Implementation and Evaluation of Cgroups Function for Active Memory Constraints in Tiered Memory Environment
+# CGTIER: Active Memory Limitation Technique via Cgroups in Tiered Memory Envirionments
 
 [![Kernel Version](https://img.shields.io/badge/Linux%20Kernel-6.15.6-blue.svg)](https://www.kernel.org/)
 
